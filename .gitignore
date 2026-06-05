@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+
+# Kimi CLI sessions & logs (may contain sensitive context)
+.kimi/
+.kimi-code/
+kimi.log
+*.log
+
+# Shared runtime files (game state, inbox messages)
+shared/inbox/*/
+shared/inbox/outbox/
+shared/*.json
+shared/*.log
+
+# Temp files
+*.tmp
+*_temp.bat
+*_temp.sh
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
