@@ -172,11 +172,11 @@ Agent Wrapper 是每个角色席位（seat）的独立进程，负责：
 - **无 User Session**
 - **流程**：turn_token → GM展示完整上下文 → TUI等待输入 → 发送action
 
-### beatrice 模式
-- **仅 GM Session**：合规复核、剧情裁决
-- **无 User Session**
-- **不参与普通令牌环**
-- **处理**：`action_review` 请求 → GM审查 → 返回 `action_review_result`
+### beatrice 模式（贝阿朵莉切，可扮演）
+- **GM Session + User Session**：和普通角色一样参与令牌环
+- **特权**：红字/金字声明、薛定谔瞬移、裁决决斗
+- **红字机制**：在 action_text 中声明 `【红字】...【/红字】`，orchestrator 确认有效性后广播
+- **合规**：由 BEATRICE 自己的 GM Session 负责，不再依赖外部复核
 
 ### npc 模式（新增）
 - **轻量级 User Session**：简化 prompt，行为模式相对固定
@@ -252,10 +252,11 @@ agent_wrapper.py
 - 确保玩家信息公平：每个角色收到 turn_token 时，看到的是**完整**的等待期间事件
 - GM Session 负责从 buffer 中提取关键信息（分层 prompt）
 
-### 3. 为什么 BEATRICE 复核是异步的？
-- Orchestrator 端：`on_action_received` 中 `asyncio.create_task(_beatrice_review_async)`
-- 不阻塞令牌环
-- 复核结果作为 notification 发送给玩家
+### 3. 为什么移除中心化的 BEATRICE 复核？
+- **职能重复**：每个 agent 已有 GM Session 做规则判定，再由外部 BEATRICE 复核是多余的
+- **BEATRICE 可被扮演**：合规判定下放到各 agent 自己的 GM Session，BEATRICE 作为普通角色参与令牌环
+- **红字特权**：BEATRICE 的特权是红字/金字（由 orchestrator 确认有效性），而非外部复核
+- **游戏可控**：人格化的 BEATRICE 能调控剧情节奏，而不是被钉死在规则执行者位置
 
 ### 4. 为什么保留 scene 兼容？
 - 旧 orchestrator 可能仍然发送 scene 消息

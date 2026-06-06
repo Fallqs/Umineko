@@ -349,32 +349,6 @@ class Orchestrator:
 
         self.narrative_log.append(f"Day{self.state.day} {slot} {role}: {action_text[:200]}")
 
-        # BEATRICE 复核（异步，不阻塞令牌环）
-        if self.state.enable_beatrice_review and seat_id != "BEATRICE":
-            asyncio.create_task(self._beatrice_review_async(seat_id, role, action_text))
-
-    async def _beatrice_review_async(self, seat_id: str, role: str, action_text: str):
-        """BEATRICE 复核回调（异步，不阻塞令牌环）。"""
-        try:
-            result = await self.beatrice_engine.request_review(seat_id, action_text)
-        except Exception as e:
-            print(f"[Orchestrator] BEATRICE review error: {e}")
-            return
-        verdict = result.get("result", "approve")
-        reason = result.get("reason", "")
-        if verdict == "reject":
-            print(f"[Orchestrator] ❌ BEATRICE rejected action by {role}: {reason}")
-            seat = self.network.seats.get(seat_id)
-            if seat:
-                await self.network.send_and_drain(seat, {
-                    "type": "notification",
-                    "title": "GM复核结果",
-                    "body": f"你的行动未通过贝阿朵莉切的复核。\n原因：{reason}",
-                    "severity": "warning",
-                })
-        else:
-            print(f"[Orchestrator] ✅ BEATRICE approved action by {role}")
-
     # ------------------------------------------------------------------
     # 特殊事件
     # ------------------------------------------------------------------

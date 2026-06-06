@@ -6,6 +6,7 @@ Agent Wrapper for 海猫剧本杀 - v3 (TCP Client 模式)
 - 每个席位一个 agent 进程，作为 TCP client 连接到 orchestrator
 - 进程内维护一个 GM Session（必需）和一个可选的 User Session（auto 模式）
 - 支持四种模式：auto / human / beatrice / npc
+- beatrice 模式：贝阿朵莉切作为普通角色参与，拥有红字/金字特权
 - 核心优化：休眠-激活机制（未收到 turn_token 时零 API 调用）
 
 通信协议：
@@ -235,8 +236,8 @@ class SeatAgent:
         self.gm = SessionWrapper("GM", gm_work_dir, gm_sid)
         await self.gm.init(config, self.model_name, self.thinking, self.yolo)
 
-        # User Session（auto / npc 模式）
-        if self.mode in ("auto", "npc"):
+        # User Session（auto / npc / beatrice 模式）
+        if self.mode in ("auto", "npc", "beatrice"):
             user_work_dir = _prepare_md_work_dir(
                 self.role_dir,
                 "PLAYER",
@@ -465,16 +466,8 @@ class SeatAgent:
         )
         prompt = "\n".join(prompt_parts)
 
-        # beatrice 模式：简单响应
-        if self.mode == "beatrice":
-            await self._send_action(
-                msg_id, f"贝阿朵莉切在{location}环视四周，嘴角浮现意味深长的微笑。"
-            )
-            self.is_hibernating = True
-            return
-
-        # auto / npc 模式：交给 User Session
-        if self.mode in ("auto", "npc") and self.user:
+        # auto / npc / beatrice 模式：交给 User Session
+        if self.mode in ("auto", "npc", "beatrice") and self.user:
             await self.user_input_queue.put({"type": "input", "text": prompt, "id": msg_id})
             # 不需要在这里发送 action，_user_loop 会处理
             return
@@ -521,18 +514,7 @@ class SeatAgent:
             text = text + notif_summary
             self.pending_notifications.clear()
 
-        if self.mode == "beatrice":
-            self._send_to_orchestrator({
-                "type": "gm_output",
-                "seat_id": self.seat_id,
-                "parent_id": msg_id,
-                "text": "贝阿朵主 GM 已同步场景状态。",
-                "orchestration_requests": [],
-            })
-            await self._drain_orchestrator()
-            return
-
-        if self.mode in ("auto", "npc"):
+        if self.mode in ("auto", "npc", "beatrice"):
             if self.user is None or self._spectator:
                 return
             user_text = f"{text}\n\n请描述你的行动。"
@@ -613,12 +595,9 @@ class SeatAgent:
         original_action = msg.get("original_action", "")
         msg_id = msg.get("id", "")
 
-        if self.mode == "beatrice":
-            return
-
         if result == "approve":
             notify_text = f"【GM 审查结果】你的行动已通过。\n原因: {reason}"
-            if self.mode in ("auto", "npc") and self.user:
+            if self.mode in ("auto", "npc", "beatrice") and self.user:
                 await self.user_input_queue.put({"type": "input", "text": notify_text, "id": msg_id})
             else:
                 try:
@@ -627,7 +606,7 @@ class SeatAgent:
                     pass
         else:
             reject_base = f"【GM 审查结果】你的行动未通过。\n原因: {reason}\n\n你之前的行动:\n{original_action}\n\n请给出修改建议，让该行动合规。"
-            if self.mode in ("auto", "npc") and self.user and self.gm:
+            if self.mode in ("auto", "npc", "beatrice") and self.user and self.gm:
                 try:
                     gm_advice, _, _ = await self.gm.run_once(reject_base)
                 except Exception:
@@ -646,9 +625,6 @@ class SeatAgent:
 
     async def _handle_notification(self, msg: dict):
         """处理 orchestrator 发来的系统通知。"""
-        if self.mode == "beatrice":
-            return
-
         if self.is_hibernating:
             # 休眠时存入 buffer（但如果 buffer 已处理过同类型的，可去重）
             self.hibernation_buffer.append(msg)
@@ -770,7 +746,7 @@ class SeatAgent:
             asyncio.create_task(self._orchestrator_reader_loop()),
             asyncio.create_task(self._gm_loop()),
         ]
-        if self.mode in ("auto", "npc") and self.user:
+        if self.mode in ("auto", "npc", "beatrice") and self.user:
             tasks.append(asyncio.create_task(self._user_loop()))
 
         try:
@@ -819,7 +795,7 @@ def main() -> None:
     parser.add_argument("--orchestrator-host", type=str, default="127.0.0.1", help="Orchestrator host")
     parser.add_argument("--orchestrator-port", type=int, required=True, help="Orchestrator port")
     parser.add_argument("--mode", type=str, choices=["auto", "human", "beatrice", "npc"], default="auto",
-                        help="auto=AI mock user, human=human player, beatrice=主 GM, npc=NPC轻量模式")
+                        help="auto=AI mock user, human=human player, beatrice=贝阿朵莉切(可扮演), npc=NPC轻量模式")
     parser.add_argument("--yolo", action="store_true", default=True)
     parser.add_argument("--no-yolo", dest="yolo", action="store_false")
     parser.add_argument("--thinking", action="store_true", default=False)

@@ -59,9 +59,6 @@ class GameState:
     battler_final_score: Optional[int] = None
     gm_bonus: Dict[str, int] = field(default_factory=dict)
 
-    # BEATRICE 复核开关
-    enable_beatrice_review: bool = True
-
     # Seat 历史
     seat_role_history: Dict[str, List[str]] = field(default_factory=dict)
     elimination_order: List[str] = field(default_factory=list)
