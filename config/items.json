@@ -1,0 +1,188 @@
+{
+  "_comment": "物品注册表。每个 item_id 对应唯一的物品实例。granted_actions 使用元行动(op)组合定义行为。",
+  "items": [
+    {
+      "id": "revolver",
+      "name": "左轮手枪",
+      "type": "permanent",
+      "description": "一把老旧的左轮手枪，表面有轻微的磨损痕迹",
+      "player_desc": "你握着这把沉甸甸的左轮手枪。转轮可以顺畅地转动，枪身保养良好。",
+      "gm_desc": "一把.38口径左轮手枪，6发弹巢。金藏的收藏品之一。",
+      "location": "书房",
+      "day_available": 1,
+      "initial_state": {"ammo": 6},
+      "granted_actions": [
+        {
+          "id": "shoot",
+          "name": "射击",
+          "ap_cost": 5,
+          "target_type": "role",
+          "priority": 100,
+          "steps": [
+            {"op": "check_target_alive", "error_msg": "{target} 已死亡或不在场"},
+            {"op": "check_item_state", "key": "ammo", "condition": ">0", "error_msg": "枪膛空空如也"},
+            {"op": "consume_item_state", "key": "ammo", "delta": -1},
+            {"op": "broadcast", "message": "突然掏出了枪！", "exclude_self": true},
+            {"op": "notify_self", "title": "射击", "body": "你向 {target} 开枪了！（剩余 {item_state.ammo} 发）", "severity": "error"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 向 {target} 开枪"}
+          ],
+          "on_failure": {
+            "steps": [
+              {"op": "notify_self", "title": "射击", "body": "你扣动扳机，但枪膛空空如也。你仍然可以用枪威胁对方。", "severity": "warning"}
+            ]
+          }
+        },
+        {
+          "id": "threaten",
+          "name": "威胁",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 50,
+          "steps": [
+            {"op": "broadcast", "message": "{role} 用武器指着 {target}！", "exclude_self": true},
+            {"op": "notify_self", "title": "威胁", "body": "你用武器指着 {target}，气氛紧张。", "severity": "warning"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 威胁 {target}"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "poison_bottle",
+      "name": "毒药瓶",
+      "type": "consumable",
+      "description": "一个贴着标签的小瓶子，里面装着无色液体",
+      "player_desc": "你手中握着这瓶毒药。标签上写着'氰化物'——一滴就足以致命。",
+      "gm_desc": "高纯度氰化物溶液。来自地下密室的储备，总量约10ml。",
+      "location": "地下密室",
+      "day_available": 3,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "使用毒药",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {"op": "consume_item"},
+            {"op": "notify_self", "title": "使用", "body": "你将毒药混入了饮料中...", "severity": "error"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 使用了毒药"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "diary_1986",
+      "name": "金藏的日记",
+      "type": "permanent",
+      "description": "一本封面写着'1986'的旧日记，上着一把小锁",
+      "player_desc": "你翻开这本日记，纸张已经发黄。里面记录着金藏对'黄金魔女'的研究。",
+      "gm_desc": "金藏从1986年开始的研究笔记，包含三代贝阿朵的身份线索。",
+      "location": "书房",
+      "day_available": 1,
+      "unlocks_info": ["S-金藏日记", "C-金藏遗书"]
+    },
+    {
+      "id": "master_key",
+      "name": "管家钥匙",
+      "type": "permanent",
+      "description": "一把古老的黄铜钥匙，可以打开岛上大部分房间",
+      "player_desc": "你握着这把沉甸甸的钥匙。它看起来可以打开许多门。",
+      "gm_desc": "金藏的管家钥匙，可以打开本馆、别馆和书房的所有房间。",
+      "location": "本馆",
+      "day_available": 1,
+      "initial_state": {"uses_remaining": 999}
+    },
+    {
+      "id": "rabbit_doll",
+      "name": "兔子玩偶",
+      "type": "permanent",
+      "description": "一个可爱的兔子玩偶，真里亚从不离身",
+      "player_desc": "你轻轻抚摸着这个兔子玩偶。它叫'樱太郎'，是真里亚最好的朋友。",
+      "gm_desc": "真里亚的兔子玩偶'樱太郎'。在特定剧情中可以作为护身符。",
+      "location": "客房",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "gift",
+          "name": "赠送兔子玩偶",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 50,
+          "steps": [
+            {"op": "check_target_alive", "error_msg": "{target} 已死亡或不在场。"},
+            {"op": "transfer_item", "to_role": "{target}"},
+            {"op": "notify_target", "title": "收到物品", "body": "【{role}】赠送给你兔子玩偶。", "severity": "info"},
+            {"op": "notify_self", "title": "赠送", "body": "你将兔子玩偶交给了 {target}。", "severity": "info"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 赠送兔子玩偶给 {target}"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lucky_charm",
+      "name": "护身符",
+      "type": "consumable",
+      "description": "一个绣着六轩岛纹章的小小护身符，据说能带来好运",
+      "player_desc": "你握着这个温热的护身符，感到一丝安心。",
+      "gm_desc": "来自神社的旧护身符。赠送可解除对方恐惧，但只能使用一次。",
+      "location": "神社",
+      "day_available": 2,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "使用护身符",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {"op": "consume_item"},
+            {"op": "grant_buff", "buff_id": "encouraged", "duration": 2},
+            {"op": "notify_self", "title": "护身符", "body": "你使用了护身符，感到一股温暖的力量涌上心头。（获得【受到鼓舞】）", "severity": "info"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 使用了护身符"}
+          ]
+        },
+        {
+          "id": "gift",
+          "name": "赠送护身符",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 50,
+          "steps": [
+            {"op": "check_target_alive", "error_msg": "{target} 已死亡或不在场。"},
+            {"op": "consume_item"},
+            {"op": "remove_buff", "target": "{target}", "buff_id": "terrified"},
+            {"op": "grant_buff", "target": "{target}", "buff_id": "encouraged", "duration": 2},
+            {"op": "notify_target", "title": "收到护身符", "body": "【{role}】将护身符赠予你，恐惧消散，你感到受到鼓舞。", "severity": "info"},
+            {"op": "notify_self", "title": "赠送", "body": "你将护身符赠给了 {target}，愿它保佑对方。", "severity": "info"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 赠送护身符给 {target}"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "energy_drink",
+      "name": "提神饮料",
+      "type": "consumable",
+      "description": "一瓶深红色的能量饮料，标签上写着'特制配方'",
+      "player_desc": "你打开瓶盖，闻到一股浓烈的草药味。喝下去应该能恢复不少精神。",
+      "gm_desc": "金藏秘制的提神饮料，含高浓度咖啡因和草药提取物。恢复5点行动点。",
+      "location": "厨房",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "饮用提神饮料",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {"op": "consume_item"},
+            {"op": "restore_ap", "amount": 5},
+            {"op": "notify_self", "title": "饮用", "body": "【饮用】你喝下了提神饮料，感到精神焕发！（+5 行动点）", "severity": "info"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 饮用了提神饮料"}
+          ]
+        }
+      ]
+    }
+  ]
+}

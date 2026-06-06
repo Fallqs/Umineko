@@ -21,11 +21,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+from .action_context import ActionContext
 from .action_engine import ActionEngine, ParsedAction
 from .beatrice_engine import BeatriceEngine
 from .config_loader import ConfigLoader
 from .death_engine import DeathEngine, SEAT_CHAINS
 from .location_engine import LocationEngine
+from .meta_engine import MetaActionEngine, ActionResult
 from .network import NetworkLayer, SeatConnection
 from .npc_engine import NPCEngine
 from .process_manager import ProcessManager
@@ -66,15 +68,18 @@ class Orchestrator:
         # 基础设施
         self.config = ConfigLoader(self.root_dir / "config")
         self.state = GameState()
+        # 注入物品注册表（若配置存在则加载，否则为空）
+        self.state.item_registry = dict(self.config.items)
         self.network = NetworkLayer()
         self.server = GameServer(host, port, self.network, msg_handler=self)
         self.pm = ProcessManager(self.root_dir, self._normalize_python_path(python_exe), self.network)
 
         # 游戏逻辑引擎
-        self.time_engine = TimeEngine(self.state, callbacks=self)
+        self.time_engine = TimeEngine(self.state, callbacks=self, config=self.config)
         self.location_engine = LocationEngine(self.state, self.config)
-        self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self)
+        self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self, config=self.config)
         self.action_engine = ActionEngine(self.state, self.config, self.network)
+        self.meta_engine = MetaActionEngine(self.state, self.network)
         self.npc_engine = NPCEngine(self.state, self.pm)
         self.death_engine = DeathEngine(self.state, self.pm, self.network, log_callback=self._log_event)
         self.beatrice_engine = BeatriceEngine(self.state, self.network)
@@ -278,7 +283,8 @@ class Orchestrator:
     async def on_dawn(self) -> None:
         print("[Orchestrator] ☀️ DAWN: 清晨到来...")
         self._log_event("SYSTEM", f"===== DAWN Day{self.state.day} =====")
-        self.state.reset_action_points()
+        daily_ap = self.config.get_ap_cost("daily_reset") if hasattr(self.config, "get_ap_cost") else 26
+        self.state.reset_action_points(daily_ap)
         self.state.sleeping.clear()
         self.state.night_owl.clear()
         for role in self.state.alive_roles:
@@ -291,8 +297,8 @@ class Orchestrator:
             await self._broadcast_notification("清晨事件", f"发现了新的死亡：\n{death_text}", severity="error")
         else:
             await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
-        self._log_event("SYSTEM", f"行动点重置为50，存活: {sorted(self.state.alive_roles)}")
-        print(f"[Orchestrator] DAWN 完成，行动点已重置为50")
+        self._log_event("SYSTEM", f"行动点重置为26，存活: {sorted(self.state.alive_roles)}")
+        print(f"[Orchestrator] DAWN 完成，行动点已重置为26")
 
     async def on_free_slot(self, slot: str) -> None:
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
@@ -305,8 +311,10 @@ class Orchestrator:
         random.shuffle(locations)
         print(f"[Orchestrator] {slot}: 活跃地点 {locations}")
         self._log_event("SYSTEM", f"{slot} 开始，活跃地点: {locations}")
+        # 每个时间槽开始时重置调查次数
+        self.state.reset_investigations()
         for loc in locations:
-            await self.token_ring.run(loc, groups[loc], slot, rounds=2)
+            await self.token_ring.run(loc, groups[loc], slot)
         moves = self.location_engine.resolve_pending_moves()
         for role, frm, to, success in moves:
             status = "成功" if success else "失败"
@@ -321,23 +329,27 @@ class Orchestrator:
             if role not in self.state.sleeping:
                 self.state.locations[role] = "餐厅"
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
+        # 每个时间槽开始时重置调查次数
+        self.state.reset_investigations()
         if active_roles:
-            await self.token_ring.run("餐厅", active_roles, slot, rounds=1)
+            await self.token_ring.run("餐厅", active_roles, slot)
         await self._broadcast_notification(f"{meal_name}结束", f"{meal_name}结束了。", severity="info")
 
     async def on_sleep_check(self) -> None:
         print("[Orchestrator] 🌙 SLEEP_CHECK: 询问是否睡觉...")
         self._log_event("SYSTEM", "SLEEP_CHECK: 选择睡觉或熬夜")
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
+        night_owl_def = self.config.get_buff("night_owl") if hasattr(self.config, "get_buff") else None
         for role in active_roles:
             seat_id = self.state.role_controller.get(role)
             if not seat_id:
                 continue
             is_ai = seat_id in self.state.ai_seats or seat_id.startswith("NPC_")
-            if is_ai:
-                self.state.night_owl.add(role)
-            else:
-                self.state.night_owl.add(role)
+            # 所有角色默认选择熬夜（AI/玩家都如此，简化逻辑）
+            self.state.night_owl.add(role)
+            # 通过 buff 系统施加 night_owl
+            if night_owl_def:
+                self.state.apply_buff(role, "night_owl", night_owl_def)
         night_owls = sorted(self.state.night_owl)
         if night_owls:
             self._log_event("SYSTEM", f"熬夜角色: {night_owls}")
@@ -357,6 +369,68 @@ class Orchestrator:
         )
 
     # ------------------------------------------------------------------
+    # 物品行为辅助（元行动集成）
+    # ------------------------------------------------------------------
+
+    def _find_granted_action(self, role: str, action_id: str) -> Optional[dict]:
+        """查找角色可用的 granted action（先查物品，再查角色专属，最后查通用行动）。"""
+        # 1. 搜索物品授予的行动
+        for item_id in self.state.get_inventory(role):
+            item = self.state.item_registry.get(item_id, {})
+            for action_def in item.get("granted_actions", []):
+                if action_def.get("id") == action_id:
+                    return {"item_id": item_id, "action_def": action_def, "source": "item"}
+        # 2. 搜索角色专属行动
+        if self.config:
+            role_actions = self.config.game_rules.get("role_granted_actions", {})
+            for action_def in role_actions.get(role, []):
+                if action_def.get("id") == action_id:
+                    return {"item_id": None, "action_def": action_def, "source": "role"}
+            # 3. 搜索通用行动（所有角色可用）
+            for action_def in self.config.game_rules.get("universal_actions", []):
+                if action_def.get("id") == action_id:
+                    return {"item_id": None, "action_def": action_def, "source": "universal"}
+        return None
+
+    async def _execute_granted_action(self, role: str, action_id: str, target: str, location: str, slot: str, seat: SeatConnection, force_item_id: Optional[str] = None) -> bool:
+        """通过元行动引擎执行物品或角色专属的行动。返回是否成功执行。
+
+        若指定 force_item_id，则只在该物品中查找 action_id（用于赠送等需指定物品的场景）。
+        """
+        found = None
+        if force_item_id:
+            item = self.state.item_registry.get(force_item_id, {})
+            for action_def in item.get("granted_actions", []):
+                if action_def.get("id") == action_id:
+                    found = {"item_id": force_item_id, "action_def": action_def, "source": "item"}
+                    break
+        if not found:
+            found = self._find_granted_action(role, action_id)
+        if not found:
+            return False
+        item_id = found["item_id"]
+        action_def = found["action_def"]
+        ctx = ActionContext(
+            role=role, target=target, item_id=item_id,
+            location=location, slot=slot, seat=seat
+        )
+        # 将当前物品状态注入变量池（供插值使用）
+        if item_id:
+            item_state = self.state.item_states.get(item_id, {})
+            for k, v in item_state.items():
+                ctx.setvar(f"item_state.{k}", v)
+        result = await self.meta_engine.execute_steps(
+            action_def.get("steps", []),
+            ctx,
+            on_failure=action_def.get("on_failure")
+        )
+        # 处理日志
+        log_msg = ctx.getvar("_log_event_message")
+        if log_msg:
+            self._log_event(ctx.getvar("_log_event_type", "ACTION"), log_msg)
+        return result.success
+
+    # ------------------------------------------------------------------
     # TokenCallbacks 实现
     # ------------------------------------------------------------------
 
@@ -369,46 +443,251 @@ class Orchestrator:
         action_text = action_msg.get("action_text", "")
         print(f"[Orchestrator] 📨 action from {seat_id}({role}): {action_text[:80]}...")
 
-        parsed = self.action_engine.parse(action_text)
+        # 计算同场角色，用于 parse 阶段识别目标
+        nearby = [r for r in self.state.alive_roles
+                  if self.state.locations.get(r) == location and r != role]
+
+        parsed = self.action_engine.parse(action_text, nearby_roles=nearby)
 
         # 记录完整行动（不截断）
         self._log_event("ACTION", f"{role} (@{location}): {action_text}")
 
-        # 调查
-        if parsed.investigate:
-            base_cost = 2
-            actual_cost = self.state.get_action_point_cost(role, base_cost)
-            if self.state.consume_action_point(role, actual_cost):
-                info = await self.action_engine.execute_investigate(role, location, seat)
-                if info:
+        # --------------------------------------------------------------
+        # 互斥规则：每轮只能执行一个特殊行动（发言/移动可叠加）
+        # 优先级：决斗 > 开枪 > 验尸 > 搜索 > 调查 > 拾取/使用/赠送 > 安慰
+        # --------------------------------------------------------------
+        special_executed = False
+
+        # 调查（场景 或 特定玩家）
+        if not special_executed and (parsed.investigate or parsed.investigate_target):
+            investigations_remaining = max(0, 2 - self.state.get_investigations_used(role))
+            if investigations_remaining <= 0:
+                await self.network.send_and_drain(seat, {
+                    'type': 'notification', 'title': '行动失败',
+                    'body': '本时间槽调查次数已用尽，本轮只能发言或执行其他非调查行动。', 'severity': 'warning'
+                })
+                self._log_event('ACTION', f'{role} 调查失败（本槽次数已用尽）')
+            else:
+                base_cost = self.config.get_ap_cost("investigate") if hasattr(self.config, "get_ap_cost") else 2
+                actual_cost = self.state.get_action_point_cost(role, base_cost)
+                if self.state.consume_action_point(role, actual_cost):
+                    if self.state.use_investigation(role):
+                        if parsed.investigate_target:
+                            info = await self.action_engine.execute_investigate_target(
+                                role, parsed.investigate_target, seat
+                            )
+                            await self.network.send_and_drain(seat, {
+                                'type': 'notification', 'title': '观察', 'body': info, 'severity': 'info'
+                            })
+                            self._log_event('INVESTIGATE', f'{role} 观察 {parsed.investigate_target}: {info[:100]}')
+                        else:
+                            info = await self.action_engine.execute_investigate(role, location, seat)
+                            if info:
+                                await self.network.send_and_drain(seat, {
+                                    'type': 'notification', 'title': '调查发现', 'body': info, 'severity': 'info'
+                                })
+                                self._log_event('INVESTIGATE', f'{role} 在{location}: {info}')
+                    else:
+                        # 防御性回退：理论上 use_investigation 应与 remaining 一致
+                        self.state.refund_action_point(role, actual_cost)
+                        await self.network.send_and_drain(seat, {
+                            'type': 'notification', 'title': '行动失败',
+                            'body': '本时间槽调查次数已用尽。', 'severity': 'warning'
+                        })
+                        self._log_event('ACTION', f'{role} 调查失败（次数冲突）')
+                else:
                     await self.network.send_and_drain(seat, {
-                        "type": "notification", "title": "调查发现", "body": info, "severity": "info"
+                        'type': 'notification', 'title': '行动失败', 'body': '行动点不足，无法调查。', 'severity': 'warning'
                     })
-                    self._log_event("INVESTIGATE", f"{role} 在{location}: {info}")
+                    self._log_event('ACTION', f'{role} 调查失败（行动点不足）')
+        # 开枪
+        if not special_executed and parsed.shoot_target:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("shoot") if hasattr(self.config, "get_ap_cost") else 5)
+            if self.state.consume_action_point(role, cost):
+                # 优先通过元行动引擎执行物品授予的射击
+                meta_ok = await self._execute_granted_action(
+                    role, "shoot", parsed.shoot_target, location, slot, seat
+                )
+                if not meta_ok:
+                    # fallback 到默认射击逻辑
+                    shoot_result = await self.action_engine.execute_shoot(role, parsed.shoot_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "射击", "body": shoot_result, "severity": "error"
+                    })
+                    await self.action_engine.broadcast_action_visibility(
+                        role, "突然掏出了枪！", location, exclude_role=role
+                    )
+                    self._log_event("ACTION", f"{role} 向 {parsed.shoot_target} 开枪")
             else:
                 await self.network.send_and_drain(seat, {
-                    "type": "notification", "title": "行动失败", "body": "行动点不足，无法调查。", "severity": "warning"
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法开枪。", "severity": "warning"
                 })
-                self._log_event("ACTION", f"{role} 调查失败（行动点不足）")
+            special_executed = True
 
-        # 发言
+        # 威胁（不消耗弹药，消耗较少 AP，可见性同射击）
+        if not special_executed and parsed.threaten_target:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("threaten") if hasattr(self.config, "get_ap_cost") else 1)
+            if self.state.consume_action_point(role, cost):
+                # 优先通过元行动引擎执行物品授予的威胁
+                meta_ok = await self._execute_granted_action(
+                    role, "threaten", parsed.threaten_target, location, slot, seat
+                )
+                if not meta_ok:
+                    # fallback 到默认威胁逻辑
+                    threaten_result = await self.action_engine.execute_threaten(role, parsed.threaten_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "威胁", "body": threaten_result, "severity": "warning"
+                    })
+                    await self.action_engine.broadcast_action_visibility(
+                        role, f"用武器威胁着{parsed.threaten_target}！", location, exclude_role=role
+                    )
+                    self._log_event("ACTION", f"{role} 威胁 {parsed.threaten_target}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法威胁。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 验尸（战人专属）
+        if not special_executed and parsed.autopsy:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("autopsy") if hasattr(self.config, "get_ap_cost") else 2)
+            if self.state.consume_action_point(role, cost):
+                meta_ok = await self._execute_granted_action(role, "autopsy", "", location, slot, seat)
+                if not meta_ok:
+                    autopsy_result = await self.action_engine.execute_autopsy(role, location, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "验尸", "body": autopsy_result, "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 验尸: {autopsy_result[:100]}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法验尸。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 搜身
+        if not special_executed and parsed.search_target:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("search") if hasattr(self.config, "get_ap_cost") else 3)
+            if self.state.consume_action_point(role, cost):
+                meta_ok = await self._execute_granted_action(role, "search", parsed.search_target, location, slot, seat)
+                if not meta_ok:
+                    search_result = await self.action_engine.execute_search(role, parsed.search_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "搜身", "body": search_result, "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 搜身 {parsed.search_target}: {search_result[:100]}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法搜身。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 拾取物品
+        if not special_executed and parsed.pickup:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("pickup") if hasattr(self.config, "get_ap_cost") else 1)
+            if self.state.consume_action_point(role, cost):
+                meta_ok = await self._execute_granted_action(role, "pickup", "", location, slot, seat)
+                if not meta_ok:
+                    pickup_result = await self.action_engine.execute_pickup(role, location, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "拾取", "body": pickup_result, "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 拾取: {pickup_result[:100]}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法拾取。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 赠送物品——必须指定具体物品；所有物品默认可赠送，配置了 gift action 的走元行动
+        if not special_executed and parsed.gift_target and parsed.gift_item:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("gift") if hasattr(self.config, "get_ap_cost") else 1)
+            if self.state.consume_action_point(role, cost):
+                # 1. 在背包中模糊匹配物品
+                matched_item = None
+                for item_id in self.state.get_inventory(role):
+                    item = self.state.item_registry.get(item_id, {})
+                    if parsed.gift_item == item_id or parsed.gift_item in item.get("name", ""):
+                        matched_item = item_id
+                        break
+                if not matched_item:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "赠送失败",
+                        "body": f"你想赠送 '{parsed.gift_item}'，但背包中没有这件物品。", "severity": "warning"
+                    })
+                else:
+                    # 2. 检查该物品是否有 gift action；有则走元行动，无则走默认赠送
+                    item = self.state.item_registry.get(matched_item, {})
+                    has_gift_action = any(a.get("id") == "gift" for a in item.get("granted_actions", []))
+                    if has_gift_action:
+                        meta_ok = await self._execute_granted_action(
+                            role, "gift", parsed.gift_target, location, slot, seat, force_item_id=matched_item
+                        )
+                        if not meta_ok:
+                            await self.network.send_and_drain(seat, {
+                                "type": "notification", "title": "赠送失败",
+                                "body": f"赠送 {item.get('name', matched_item)} 失败。", "severity": "warning"
+                            })
+                    else:
+                        gift_result = await self.action_engine.execute_gift(
+                            role, parsed.gift_target, matched_item, seat
+                        )
+                        await self.network.send_and_drain(seat, {
+                            "type": "notification", "title": "赠送", "body": gift_result, "severity": "info"
+                        })
+                        self._log_event("ACTION", f"{role} 赠送: {gift_result[:100]}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法赠送。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 安慰
+        if not special_executed and parsed.comfort_target:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("comfort") if hasattr(self.config, "get_ap_cost") else 1)
+            if self.state.consume_action_point(role, cost):
+                meta_ok = await self._execute_granted_action(role, "comfort", parsed.comfort_target, location, slot, seat)
+                if not meta_ok:
+                    comfort_result = await self.action_engine.execute_comfort(role, parsed.comfort_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "安慰", "body": comfort_result, "severity": "info"
+                    })
+                    await self.action_engine.broadcast_action_visibility(
+                        role, f"正在安慰{parsed.comfort_target}", location, exclude_role=role
+                    )
+                    self._log_event("ACTION", f"{role} 安慰 {parsed.comfort_target}: {comfort_result[:100]}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法安慰。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 发言（始终可叠加）
         if parsed.speech:
             await self.action_engine.broadcast_speech(role, parsed.speech, location)
             self._log_event("SPEECH", f'{role} (@{location}): "{parsed.speech}"')
 
-        # 移动意向
+        # 移动意向（始终可叠加）
         next_move = parsed.next_move or action_msg.get("next_move")
         if next_move:
             self.action_engine.handle_move_intent(role, next_move)
             self._log_event("MOVE_INTENT", f"{role} 计划移动到: {next_move}")
 
-        # 决斗
+        # 决斗（最高优先级，但为剧情关键始终执行）
         if parsed.duel_beatrice and role in ("嘉音", "纱音"):
-            await self._handle_duel(role, location)
+            meta_ok = await self._execute_granted_action(role, "duel_beatrice", "", location, slot, seat)
+            if not meta_ok:
+                await self._handle_duel(role, location)
 
-        # 薛定谔检查
-        if slot in {"MORNING_1", "MORNING_2", "MORNING_3", "NOON_1", "NOON_2", "NOON_3",
-                    "AFTERNOON_1", "AFTERNOON_2", "AFTERNOON_3", "EVENING_1", "EVENING_2", "EVENING_3"}:
+        # 薛定谔检查（始终执行）
+        if self.time_engine.is_free_slot(slot):
             issue = self.beatrice_engine.check_schrodinger(role, location)
             if issue:
                 await self._handle_schrodinger(issue)
@@ -558,7 +837,7 @@ class Orchestrator:
 新版行动系统：
 - 每天分为多个时间槽（清晨、自由时间、早午晚饭、睡觉选择、深夜）
 - 自由时间内，按地点分组，同一地点内令牌环串行行动
-- 每个角色每天50行动点，调查消耗2点，移动消耗1-3点
+- 每个角色每天26行动点，调查消耗2点，移动消耗1-3点
 - 发言不消耗行动点
 - 晚饭后可选择睡觉或继续行动（熬夜消耗2倍）
 

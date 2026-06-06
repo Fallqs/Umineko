@@ -1,0 +1,116 @@
+{
+  "_comment": "游戏常数与规则配置。修改此文件无需改动Python代码即可调整游戏平衡。",
+  "action_points": {
+    "daily_reset": 26,
+    "investigate": 2,
+    "investigate_target": 2,
+    "search": 3,
+    "shoot": 5,
+    "autopsy": 2,
+    "pickup": 1,
+    "gift": 1,
+    "comfort": 1,
+    "threaten": 1,
+    "move_per_distance_unit": 1
+  },
+  "token_ring": {
+    "free_slot_rounds": 10,
+    "meal_slot_rounds": 5,
+    "investigations_per_slot": 2,
+    "wait_timeout": 30
+  },
+  "info_points": {
+    "P-": 1,
+    "S-": 2,
+    "C-": 4
+  },
+  "search_success_rate": 0.6,
+  "comfort_ap_restore": 2,
+  "universal_actions": [
+    {
+      "id": "search",
+      "name": "搜身",
+      "ap_cost": 3,
+      "target_type": "role",
+      "priority": 80,
+      "steps": [
+        {"op": "check_target_alive", "error_msg": "{target} 已死亡或不在场，无法搜身。"},
+        {"op": "check_random", "chance": 0.6, "error_msg": "你试图搜查 {target}，但被他/她察觉并避开了。"},
+        {"op": "notify_self", "title": "搜身", "body": "【搜身成功】你从 {target} 身上发现了物品。（具体内容由GM裁决）", "severity": "info"},
+        {"op": "log_event", "event_type": "ACTION", "message": "{role} 搜身 {target}"}
+      ]
+    },
+    {
+      "id": "pickup",
+      "name": "拾取物品",
+      "ap_cost": 1,
+      "target_type": "none",
+      "priority": 60,
+      "steps": [
+        {"op": "pickup_item", "error_msg": "你环顾{location}四周，没有找到可以带走的东西。"},
+        {"op": "notify_self", "title": "拾取", "body": "【拾取】你获得了 {item_name}。\n{item_desc}", "severity": "info"},
+        {"op": "log_event", "event_type": "ACTION", "message": "{role} 在 {location} 拾取了 {item_name}"}
+      ]
+    },
+    {
+      "id": "comfort",
+      "name": "安慰",
+      "ap_cost": 1,
+      "target_type": "role",
+      "priority": 40,
+      "steps": [
+        {"op": "check_target_alive", "error_msg": "{target} 已死亡或不在场。"},
+        {"op": "restore_ap", "target": "{target}", "amount": 2},
+        {"op": "remove_buff", "target": "{target}", "buff_id": "terrified"},
+        {"op": "notify_target", "title": "被安慰", "body": "【{role}】安慰了你，你感到精神一振（+{restored_ap} 行动点）。", "severity": "info"},
+        {"op": "broadcast", "message": "{role} 正在安慰 {target}...", "exclude_self": true},
+        {"op": "notify_self", "title": "安慰", "body": "【安慰】你安慰了 {target}，他/她恢复了些许精神（+{restored_ap} 行动点）。", "severity": "info"},
+        {"op": "log_event", "event_type": "ACTION", "message": "{role} 安慰 {target}"}
+      ]
+    }
+  ],
+  "role_granted_actions": {
+    "右代宫战人": [
+      {
+        "id": "autopsy",
+        "name": "验尸",
+        "ap_cost": 2,
+        "target_type": "none",
+        "priority": 90,
+        "steps": [
+          {"op": "check_dead_in_location", "error_msg": "{location} 没有尸体可以验尸。"},
+          {"op": "notify_self", "title": "验尸", "body": "【验尸】你检查了尸体，发现了一些线索。（需 GM 补充细节）", "severity": "info"},
+          {"op": "log_event", "event_type": "ACTION", "message": "{role} 在 {location} 验尸"}
+        ]
+      }
+    ],
+    "嘉音": [
+      {
+        "id": "duel_beatrice",
+        "name": "向贝阿朵发起决斗",
+        "ap_cost": 0,
+        "target_type": "none",
+        "priority": 999,
+        "steps": [
+          {"op": "mark_dead", "cause": "主动向贝阿朵莉切发起决斗，献出生命"},
+          {"op": "broadcast", "message": "【{role}】向贝阿朵莉切发起了决斗！\n{role} 献出了自己的生命，另一位得以继续存活。", "exclude_self": false},
+          {"op": "log_event", "event_type": "DUEL", "message": "{role} 向贝阿朵发起决斗，另一位存活"}
+        ]
+      }
+    ],
+    "纱音": [
+      {
+        "id": "duel_beatrice",
+        "name": "向贝阿朵发起决斗",
+        "ap_cost": 0,
+        "target_type": "none",
+        "priority": 999,
+        "steps": [
+          {"op": "mark_dead", "cause": "主动向贝阿朵莉切发起决斗，献出生命"},
+          {"op": "broadcast", "message": "【{role}】向贝阿朵莉切发起了决斗！\n{role} 献出了自己的生命，另一位得以继续存活。", "exclude_self": false},
+          {"op": "log_event", "event_type": "DUEL", "message": "{role} 向贝阿朵发起决斗，另一位存活"}
+        ]
+      }
+    ]
+  }
+}

@@ -71,7 +71,52 @@
 
 ## 六、消息格式
 
-当收到角色行动时，请按以下格式回复：
+### 6.1 审查响应格式（action_review）
+
+当收到合规复核请求时，你必须**严格**使用以下 XML 格式输出，不允许添加其他内容：
+
+```xml
+<result>approve</result>
+<reason>简要原因（1-2句）</reason>
+```
+
+或：
+
+```xml
+<result>reject</result>
+<reason>简要原因（1-2句）</reason>
+```
+
+⚠️ **硬性要求**：
+- `<result>` 标签内只能是 `approve` 或 `reject`，小写
+- `<reason>` 标签必须存在且非空
+- 两个标签缺一不可
+- 格式错误会被系统要求修正
+
+### 6.2 裁决响应格式（schrodinger_judgment）
+
+当收到薛定谔违规裁决请求时，你必须**严格**使用以下 XML 格式输出：
+
+```xml
+<judgment>kill: 嘉音</judgment>
+<reason>简要原因（1-2句）</reason>
+```
+
+或：
+
+```xml
+<judgment>kill: 纱音</judgment>
+<reason>简要原因（1-2句）</reason>
+```
+
+⚠️ **硬性要求**：
+- `<judgment>` 标签内必须是 `kill: 嘉音` 或 `kill: 纱音`
+- `<reason>` 标签必须存在且非空
+- 格式错误会被系统要求修正
+
+### 6.3 场景描述格式
+
+当生成场景描述或主动发言时，使用自然语言即可：
 
 ```
 【场景】...

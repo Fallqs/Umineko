@@ -19,21 +19,6 @@ import asyncio
 import json
 import re
 
-# NPC 角色行为预设（供 npc mode 使用，注入到 GM Session prompt 中）
-NPC_BEHAVIOR_PRESETS: dict[str, str] = {
-    "嘉音": "你是寡言的佣人嘉音。你倾向出现在玫瑰园和本馆，对贝阿朵相关事物敏感，优先调查可疑痕迹。遵守薛定谔规则。",
-    "纱音": "你是勤劳的佣人纱音。你倾向出现在本馆和厨房，关心战人，偶尔会准备食物。遵守薛定谔规则。",
-    "乡田": "你是厨师乡田。你倾向出现在厨房和餐厅，围绕餐饮活动，对食材敏感。",
-    "熊泽": "你是老佣人熊泽。你倾向出现在本馆和庭院，喜欢讲故事（鲭鱼传说），悠闲走动。",
-    "南条医师": "你是南条医师。你倾向出现在书房和客房，医师本职，发现尸体时优先验尸。",
-    "右代宫金藏": "你是家主右代宫金藏。你极少离开书房，研究黑魔法和黄金传说。",
-    "右代宫藏臼": "你是右代宫家长男藏臼。你在本馆和书房之间活动，关注家族利益。",
-    "右代宫夏妃": "你是右代宫夏妃。你在本馆活动，严格管理家务，对佣人要求很高。",
-    "右代宫雾江": "你是右代宫雾江。你在本馆和庭院活动，冷静理性，观察力强。",
-    "右代宫留弗夫": "你是右代宫留弗夫。你在本馆和港口活动，轻浮但观察敏锐。",
-    "右代宫楼座": "你是右代宫楼座。你在本馆和玫瑰园活动，关心女儿真里亚。",
-    "右代宫秀吉": "你是右代宫秀吉。你在本馆和餐厅活动，随和幽默，喜欢美食。",
-}
 import shutil
 import sys
 import tempfile
@@ -47,6 +32,9 @@ from kimi_cli.app import KimiCLI, enable_logging
 from kimi_cli.config import Config, load_config
 from kimi_cli.session import Session
 from kimi_cli.wire.types import TextPart, ThinkPart, ToolCall, ToolCallPart
+
+from npc_prompt_builder import build_npc_prompt
+from prompt_loader import PromptLoader
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +136,83 @@ def _strip_blocks(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# GM 输出验证器（前置到 agent 侧，支持同 Session 内修正重试）
+# ---------------------------------------------------------------------------
+
+class GMOutputValidator:
+    """验证 BEATRICE (GM) 的结构化输出格式。
+
+    设计目标：在 agent_wrapper 侧完成格式校验，解析失败时
+    立即在同一会话内要求 GM 修正，避免错误格式传播到 orchestrator。
+    """
+
+    MAX_RETRIES: int = 2
+
+    @staticmethod
+    def validate_action_review(text: str) -> tuple[bool, str, str, list[str]]:
+        """验证 action_review 输出。
+
+        Returns:
+            (success, result, reason, errors)
+        """
+        result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", text, re.IGNORECASE)
+        reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", text, re.DOTALL)
+
+        errors: list[str] = []
+        if not result_match:
+            errors.append("缺少 <result>approve</result> 或 <result>reject</result> 标签")
+        if not reason_match:
+            errors.append("缺少 <reason>审查原因</reason> 标签")
+
+        if errors:
+            return False, "", "", errors
+
+        return True, result_match.group(1).lower(), reason_match.group(1).strip(), []
+
+    @staticmethod
+    def validate_schrodinger_judgment(text: str) -> tuple[bool, str, str, list[str]]:
+        """验证 schrodinger_judgment 输出。
+
+        Returns:
+            (success, victim, reason, errors)
+        """
+        judgment_match = re.search(r"<judgment>\s*kill:\s*(嘉音|纱音)\s*</judgment>", text, re.IGNORECASE)
+        reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", text, re.DOTALL)
+
+        errors: list[str] = []
+        if not judgment_match:
+            errors.append('缺少 <judgment>kill: 嘉音</judgment> 或 <judgment>kill: 纱音</judgment> 标签')
+
+        if errors:
+            return False, "", "", errors
+
+        reason = reason_match.group(1).strip() if reason_match else "无原因"
+        return True, judgment_match.group(1), reason, []
+
+    @staticmethod
+    def build_correction_prompt(original_prompt: str, errors: list[str], original_output: str, template: str = "") -> str:
+        """构建修正 prompt，在同一会话内要求 GM 修正格式错误。
+        
+        若提供 template，则使用模板渲染；否则使用 fallback 文本。
+        """
+        error_text = "\n".join(f"- {e}" for e in errors)
+        if template:
+            from string import Template
+            return Template(template).safe_substitute(
+                original_prompt=original_prompt,
+                errors=error_text,
+                original_output=original_output,
+            )
+        return (
+            f"{original_prompt}\n\n"
+            f"【格式错误】你之前的输出存在以下问题：\n"
+            f"{error_text}\n\n"
+            f"你之前的输出：\n{original_output}\n\n"
+            f"请修正以上问题，重新输出正确的格式。只输出 XML 标签内容，不要添加额外解释。"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Session 包装
 # ---------------------------------------------------------------------------
 
@@ -224,6 +289,9 @@ class SeatAgent:
         # Sessions
         self.gm: Optional[SessionWrapper] = None
         self.user: Optional[SessionWrapper] = None
+
+        # Prompt 模板加载器
+        self.prompt_loader = PromptLoader()
 
         # 网络
         self.orchestrator_reader: Optional[asyncio.StreamReader] = None
@@ -397,8 +465,34 @@ class SeatAgent:
         else:
             print(f"[Agent] [{self.seat_id}] Unknown message type: {msg_type}")
 
+    def _extract_buffer_events(self) -> list[str]:
+        """从 hibernation_buffer 中提取可直接向玩家展示的事件。
+        提取后这些消息会从 buffer 中移除，避免 GM Session 重复处理。
+        返回事件描述列表（供 prompt 直接展示）。"""
+        events: list[str] = []
+        remaining: deque[dict] = deque()
+
+        for msg in self.hibernation_buffer:
+            title = msg.get("title", "")
+            body = msg.get("body", "")
+
+            # 这些类型的事件玩家可以直接感知
+            direct_perception_types = {
+                "同场发言", "同场事件", "收到物品", "被安慰", "被搜身",
+                "被观察", "调查发现", "射击", "拾取", "使用物品", "赠送",
+            }
+
+            if title in direct_perception_types and body:
+                events.append(f"[{title}] {body}")
+            else:
+                # 其他消息留给 GM Session 处理
+                remaining.append(msg)
+
+        self.hibernation_buffer = remaining
+        return events
+
     async def _process_hibernation_buffer(self) -> str:
-        """将 hibernation_buffer 中的全部消息传给 GM Session 处理。
+        """将 hibernation_buffer 中剩余的消息传给 GM Session 处理。
         返回 GM 认知更新摘要（内部使用，不发给 orchestrator）。"""
         if not self.hibernation_buffer:
             return ""
@@ -406,7 +500,7 @@ class SeatAgent:
             self.hibernation_buffer.clear()
             return ""
 
-        # 整理 buffer 内容
+        # 整理 buffer 内容（此时直接感知类事件已被 _extract_buffer_events 过滤掉）
         lines = []
         for msg in self.hibernation_buffer:
             title = msg.get("title", "")
@@ -418,7 +512,15 @@ class SeatAgent:
                 lines.append(f"- {text[:200]}")
 
         buffer_text = "\n".join(lines)
-        prompt = f"【系统通知摘要】在你等待行动期间，发生了以下事件：\n\n{buffer_text}\n\n请简要更新你的认知（纯内部思考，不发给别人）。"
+        if not buffer_text:
+            self.hibernation_buffer.clear()
+            return ""
+
+        prompt = self.prompt_loader.load_or_fallback(
+            "buffer_summary",
+            f"【系统通知摘要】在你等待行动期间，发生了以下事件：\n\n{buffer_text}\n\n请简要更新你的认知（纯内部思考，不发给别人）。",
+            events=buffer_text,
+        )
 
         try:
             out_text, _, _ = await self.gm.run_once(prompt)
@@ -433,11 +535,12 @@ class SeatAgent:
         """处理 turn_token 消息——轮到该 seat 行动了。
         这是唯一的激活入口。行动结束后自动回到休眠。"""
         msg_id = msg.get("id", "")
-        slot = msg.get("slot", "")
+        slot = msg.get("time_slot", "")
         location = msg.get("location", "")
-        round_num = msg.get("round", 1)
-        total_rounds = msg.get("total_rounds", 2)
+        round_num = msg.get("token_round", 1)
+        total_rounds = msg.get("token_total_rounds", 10)
         action_points = msg.get("action_points", 0)
+        investigations_remaining = msg.get("investigations_remaining", 2)
 
         # 激活
         self.is_hibernating = False
@@ -458,41 +561,62 @@ class SeatAgent:
             f"【轮到你的回合】",
             f"时间：{slot}",
             f"地点：{location}",
-            f"轮次：第{round_num}/{total_rounds}轮",
+            f"轮次：第{round_num}/{total_rounds}轮对话",
             f"剩余行动点：{action_points}",
+            f"本时间槽剩余调查次数：{investigations_remaining}/2",
         ]
 
-        # 合并未读通知（非紧急的，在 buffer 处理时已经处理了紧急的）
-        if self.pending_notifications:
-            notif_summary = "\n\n【在你行动期间发生的事件】\n" + "\n".join(
-                f"- {n.get('title', '')}: {n.get('body', '')}" for n in self.pending_notifications
-            )
-            prompt_parts.append(notif_summary)
-            self.pending_notifications.clear()
+        # 背包信息（直接从 turn_token 消息中获取，无需再次查询）
+        inventory = msg.get("inventory", [])
+        if inventory:
+            prompt_parts.append(f"你携带的物品：{', '.join(inventory)}")
+        else:
+            prompt_parts.append("你的背包是空的。")
 
-        # 追加 GM 认知更新
+        # 3. 处理休眠期间收到的事件（直接展示 + GM 认知更新）
+        buffer_events = self._extract_buffer_events()
+        if buffer_events:
+            prompt_parts.append("\n\n【在你等待期间观察到的事件】")
+            for evt in buffer_events:
+                prompt_parts.append(f"- {evt}")
+
+        # 追加 GM 认知更新（深层解读，作为背景）
         if gm_summary:
             prompt_parts.append(f"\n\n【GM 内部认知更新】\n{gm_summary}")
 
-        prompt_parts.append(
-            "\n\n请描述你的行动。行动可以是：\n"
-            "- 调查（消耗2行动点）\n"
-            "- 发言（消耗0行动点）\n"
+        if investigations_remaining > 0:
+            investigate_desc = f"- 调查当前地点或指定对象（消耗2行动点，本时间槽剩余 {investigations_remaining}/2 次机会）"
+        else:
+            investigate_desc = "- 调查（本时间槽次数已用尽，本轮无法调查）"
+
+        # 从模板加载行动选项说明
+        actions_text = self.prompt_loader.load_or_fallback(
+            "turn_token_actions",
+            "\n\n请描述你的行动。每轮你都可以发言，也可以在其中最多2轮选择调查。行动可以是：\n"
+            "- 发言（消耗0行动点，同地点所有人能听到，每轮都可以说）\n"
+            f"{investigate_desc}\n"
+            "- 使用背包中的物品（消耗1行动点）\n"
+            "- 赠送物品给同场的人\n"
             "- 移动（消耗1-3行动点，取决于距离）\n"
             "- 跳过\n\n"
             "请用自然语言描述你的行动，例如：\"我仔细调查了书房的每个角落\"或\"我走向餐厅\"。"
-            "如果你希望下个时间点移动到其他地点，请在描述末尾声明：\"下轮移动：{地点名}\""
+            "如果你希望下个时间点移动到其他地点，请在描述末尾声明：\"下轮移动：{地点名}\"",
+            investigate_desc=investigate_desc,
+            max_investigations=2,
         )
+        prompt_parts.append(actions_text)
 
         # 贝阿朵莉切特殊能力：红字/金字
         if self.role_dir.name == "贝阿朵莉切":
-            prompt_parts.append(
+            special_text = self.prompt_loader.load_or_fallback(
+                "beatrice_special",
                 "\n\n【特殊能力：红字与金字】"
                 "你是黄金魔女贝阿朵莉切。你可以在发言中使用以下 XML 标签："
                 "<red>绝对真实的陈述</red> —— 红字，一旦声明即为真实，不可反驳。"
                 "<gold>无需证明的真理</gold> —— 金字，比红字更高位的绝对真理。"
-                "你的 GM Session 会确保 red/gold 标签内的内容绝对真实，不要声明与已知真相矛盾的 red/gold 内容。"
+                "你的 GM Session 会确保 red/gold 标签内的内容绝对真实，不要声明与已知真相矛盾的 red/gold 内容。",
             )
+            prompt_parts.append(special_text)
 
         prompt = "\n".join(prompt_parts)
 
@@ -505,11 +629,11 @@ class SeatAgent:
         # human / npc 模式：直接用 GM Session 生成行动（npc 模式下 GM+User 合并）
         if self.mode in ("human", "npc") and self.gm:
             try:
-                # npc 模式：在 prompt 中注入角色行为预设
+                # npc 模式：从角色文档自动生成行为提示
                 if self.mode == "npc":
-                    preset = NPC_BEHAVIOR_PRESETS.get(self.role_dir.name, "")
+                    preset = build_npc_prompt(self.role_dir)
                     if preset:
-                        prompt = prompt + f"\n\n【角色定位】{preset}\n\n你是NPC，请直接输出角色行动，不需要解释规则。"
+                        prompt = prompt + f"\n\n{preset}"
                 out_text, _, _ = await self.gm.run_once(prompt)
                 player_input = _extract_player_input(out_text)
                 if player_input:
@@ -536,10 +660,13 @@ class SeatAgent:
                     pass
             return
 
-        # 追加行动点信息
+        # 追加行动点与调查次数信息
         ap = msg.get("action_points")
         if ap is not None:
             text = text + f"\n\n【系统状态】你当前剩余行动点：{ap}。请根据剩余行动点合理规划行动。\n"
+        inv_remaining = msg.get("investigations_remaining")
+        if inv_remaining is not None:
+            text = text + f"【系统状态】本时间槽剩余调查次数：{inv_remaining}/2。\n"
 
         # 合并未读通知
         if self.pending_notifications:
@@ -596,32 +723,51 @@ class SeatAgent:
             await self._send_action_review(player_input, msg_id)
 
     async def _handle_action_review(self, msg: dict):
-        """处理审查请求（beatrice 模式）。"""
+        """处理审查请求（beatrice 模式），带格式验证和同 Session 内重试修正。"""
         if self.mode != "beatrice":
             return
 
         text = msg.get("text", "")
-        msg_id = msg.get("id", "")
         request_id = msg.get("id", "")
         action_text = msg.get("action_text", "")
         parent_id = msg.get("parent_id", "")
 
-        try:
-            out_text, _, _ = await self.gm.run_once(text)
-        except Exception as e:
-            print(f"[Agent] [BEATRICE] Error: {e}")
-            traceback.print_exc()
-            await self._send_action_review_result(
-                request_id, "approve", "审查出错，默认通过", action_text, parent_id
+        current_prompt = text
+        out_text = ""
+        max_attempts = GMOutputValidator.MAX_RETRIES + 1
+
+        for attempt in range(max_attempts):
+            try:
+                out_text, _, _ = await self.gm.run_once(current_prompt)
+            except Exception as e:
+                print(f"[Agent] [BEATRICE] Review error (attempt {attempt + 1}/{max_attempts}): {e}")
+                if attempt == GMOutputValidator.MAX_RETRIES:
+                    await self._send_action_review_result(
+                        request_id, "approve", f"审查异常（{e}），默认通过", action_text, parent_id
+                    )
+                    return
+                continue
+
+            success, result, reason, errors = GMOutputValidator.validate_action_review(out_text)
+            if success:
+                print(f"[Agent] [BEATRICE] Review validated (attempt {attempt + 1}): {result}")
+                await self._send_action_review_result(request_id, result, reason, action_text, parent_id)
+                return
+
+            print(
+                f"[Agent] [BEATRICE] Review format error (attempt {attempt + 1}/{max_attempts}): "
+                f"{'; '.join(errors)}"
             )
-            return
 
-        result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", out_text, re.IGNORECASE)
-        reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", out_text, re.DOTALL)
-        result = result_match.group(1).lower() if result_match else "approve"
-        reason = reason_match.group(1).strip() if reason_match else out_text[:200]
-
-        await self._send_action_review_result(request_id, result, reason, action_text, parent_id)
+            if attempt < GMOutputValidator.MAX_RETRIES:
+                correction_template = self.prompt_loader.load("correction")
+                current_prompt = GMOutputValidator.build_correction_prompt(text, errors, out_text, template=correction_template)
+            else:
+                # 重试耗尽，fallback 到默认值
+                fallback_reason = f"审查格式错误（{'；'.join(errors)}），默认通过"
+                await self._send_action_review_result(
+                    request_id, "approve", fallback_reason, action_text, parent_id
+                )
 
     async def _handle_action_review_result(self, msg: dict):
         """处理 BEATRICE 返回的审查结果。"""
@@ -721,16 +867,47 @@ class SeatAgent:
         print(f"[Agent] [{self.seat_id}] Inherited state for {role}: ap={state.get('action_points')}, loc={state.get('location')}")
 
     async def _handle_schrodinger_judgment(self, msg: dict):
-        """贝阿朵模式：对薛定谔违规进行裁决。"""
+        """贝阿朵模式：对薛定谔违规进行裁决，带格式验证和同 Session 内重试修正。"""
         if self.mode != "beatrice":
             return
+
         text = msg.get("text", "")
         msg_id = msg.get("id", "")
-        try:
-            out_text, _, _ = await self.gm.run_once(text)
-        except Exception as e:
-            print(f"[Agent] [BEATRICE] Judgment error: {e}")
-            out_text = "<judgment>kill: 嘉音</judgment>\n【REASON】裁决异常，默认执行守护者清除协议。"
+
+        current_prompt = text
+        out_text = ""
+        max_attempts = GMOutputValidator.MAX_RETRIES + 1
+        final_victim = "嘉音"
+        final_reason = "裁决格式错误，默认执行守护者清除协议。"
+
+        for attempt in range(max_attempts):
+            try:
+                out_text, _, _ = await self.gm.run_once(current_prompt)
+            except Exception as e:
+                print(f"[Agent] [BEATRICE] Judgment error (attempt {attempt + 1}/{max_attempts}): {e}")
+                if attempt == GMOutputValidator.MAX_RETRIES:
+                    break
+                continue
+
+            success, victim, reason, errors = GMOutputValidator.validate_schrodinger_judgment(out_text)
+            if success:
+                print(f"[Agent] [BEATRICE] Judgment validated (attempt {attempt + 1}): {victim}")
+                final_victim = victim
+                final_reason = reason
+                break
+
+            print(
+                f"[Agent] [BEATRICE] Judgment format error (attempt {attempt + 1}/{max_attempts}): "
+                f"{'; '.join(errors)}"
+            )
+
+            if attempt < GMOutputValidator.MAX_RETRIES:
+                correction_template = self.prompt_loader.load("correction")
+                current_prompt = GMOutputValidator.build_correction_prompt(text, errors, out_text, template=correction_template)
+            else:
+                break
+
+        out_text = f"<judgment>kill: {final_victim}</judgment>\n<reason>{final_reason}</reason>"
         print(f"[Agent] [BEATRICE] Judgment ({msg_id}): {out_text[:120]}...")
         self._send_to_orchestrator({
             "type": "schrodinger_judgment_result",

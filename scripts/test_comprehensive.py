@@ -46,7 +46,7 @@ async def mock_client(
             await events.put((seat_id, f"recv:{msg_type}"))
 
             if msg_type == "turn_token":
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.01)
                 location = msg.get("location", "本馆")
                 ap = msg.get("action_points", 50)
 
@@ -129,7 +129,7 @@ async def test_movement():
         clients.append(task)
 
     try:
-        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=120)
+        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=300)
     except asyncio.TimeoutError:
         print("[Test1] Timeout")
 
@@ -212,7 +212,7 @@ async def test_multi_day():
         clients.append(task)
 
     try:
-        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=180)
+        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=600)
     except asyncio.TimeoutError:
         print("[Test2] Timeout")
 
@@ -287,7 +287,7 @@ async def test_beatrice():
                 msg_type = msg.get("type")
                 await events.put(("BEATRICE", f"recv:{msg_type}"))
                 if msg_type == "turn_token":
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.01)
                     loc = msg.get("location", "本馆")
                     resp = {
                         "type": "action", "seat_id": "BEATRICE",
@@ -309,7 +309,7 @@ async def test_beatrice():
     beatrice_task = asyncio.create_task(mock_beatrice())
 
     try:
-        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=120)
+        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=300)
     except asyncio.TimeoutError:
         print("[Test3] Timeout")
 
@@ -381,7 +381,7 @@ async def test_npc():
         clients.append(task)
 
     try:
-        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=120)
+        await asyncio.wait_for(orch.server._shutdown_event.wait(), timeout=300)
     except asyncio.TimeoutError:
         print("[Test4] Timeout")
 

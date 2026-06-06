@@ -155,7 +155,7 @@ class DeathEngine:
         self.state.alive_roles.discard(seat.role_name)
         self.state.alive_roles.add(new_role)
         if new_role not in self.state.action_points:
-            self.state.action_points[new_role] = 50
+            self.state.action_points[new_role] = 26
         self.state.record_role_for_seat(seat_id, new_role)
         self.state.role_controller[new_role] = seat_id
         # 清理旧角色的控制映射，避免ghost映射

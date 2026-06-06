@@ -1,0 +1,65 @@
+{
+  "_comment": "Buff/Debuff 效果注册表。所有效果通过元行动(op)组合定义。",
+  "buffs": {
+    "night_owl": {
+      "name": "熬夜",
+      "type": "neutral",
+      "description": "你选择继续行动，行动点消耗翻倍",
+      "duration": {
+        "type": "until_phase",
+        "phases": ["DAWN"]
+      },
+      "effects": [
+        {"op": "modify_ap_cost", "multiplier": 2.0}
+      ],
+      "removable_by": ["sleep", "force_rest"],
+      "on_apply": {
+        "notify_self": {"title": "状态", "body": "你决定熬夜，行动点消耗翻倍。", "severity": "info"}
+      },
+      "on_remove": {
+        "notify_self": {"title": "状态", "body": "清晨到来，疲劳消退。", "severity": "info"}
+      }
+    },
+    "injured": {
+      "name": "受伤",
+      "type": "debuff",
+      "description": "你受了伤，行动更加吃力",
+      "duration": {
+        "type": "turns",
+        "count": 3,
+        "countdown_on": ["token_ring_end"]
+      },
+      "effects": [
+        {"op": "modify_ap_cost", "multiplier": 1.5},
+        {"op": "modify_success_rate", "action_types": ["investigate", "search", "pickup"], "multiplier": 0.8}
+      ]
+    },
+    "terrified": {
+      "name": "恐惧",
+      "type": "debuff",
+      "description": "你被恐惧笼罩，无法进行精细操作",
+      "duration": {
+        "type": "turns",
+        "count": 2,
+        "countdown_on": ["token_ring_end"]
+      },
+      "effects": [
+        {"op": "block_action", "action_ids": ["investigate", "search"]},
+        {"op": "modify_ap_cost", "multiplier": 1.2}
+      ]
+    },
+    "encouraged": {
+      "name": "受到鼓舞",
+      "type": "buff",
+      "description": "你感到精神振奋，行动更加高效",
+      "duration": {
+        "type": "turns",
+        "count": 2,
+        "countdown_on": ["token_ring_end"]
+      },
+      "effects": [
+        {"op": "modify_ap_cost", "multiplier": 0.8}
+      ]
+    }
+  }
+}

@@ -73,14 +73,23 @@ seat: {seat_id}
         if not response:
             return {"seat_id": seat_id, "action_text": review.get("action_text", ""), "result": "approve", "reason": "BEATRICE 响应超时，默认通过"}
 
-        text = response.get("text", "")
-        result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", text, re.IGNORECASE)
-        reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", text, re.DOTALL)
+        # 优先使用 agent_wrapper 已解析的字段（新版已前置验证）
+        result = response.get("result", "")
+        reason = response.get("reason", "")
+
+        if result not in ("approve", "reject"):
+            # Fallback：从 text 字段解析 XML（兼容旧版或异常场景）
+            text = response.get("text", "")
+            result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", text, re.IGNORECASE)
+            reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", text, re.DOTALL)
+            result = result_match.group(1).lower() if result_match else "approve"
+            reason = reason_match.group(1).strip() if reason_match else text[:200]
+
         return {
             "seat_id": seat_id,
             "action_text": review.get("action_text", ""),
-            "result": (result_match.group(1).lower() if result_match else "approve"),
-            "reason": (reason_match.group(1).strip() if reason_match else text[:200]),
+            "result": result,
+            "reason": reason,
         }
 
     async def request_review(self, seat_id: str, action_text: str) -> dict:
