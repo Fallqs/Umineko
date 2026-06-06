@@ -7,70 +7,35 @@
 import asyncio
 from typing import Dict, List, Optional, Tuple
 
+from .config_loader import ConfigLoader
 from .network import NetworkLayer
 from .process_manager import ProcessManager
 from .state import GameState
 
-# 预定死亡表: (day, phase, 角色名, 死因)
-# phase 使用旧版兼容格式
-DEATH_SCHEDULE: List[Tuple[int, str, str, str]] = [
-    (2, "TWILIGHT", "右代宫秀吉", "在别馆被发现身亡，胸口有猎枪弹孔"),
-    (3, "TWILIGHT", "右代宫朱志香", "在客房内被发现，额头有枪伤"),
-    (4, "TWILIGHT", "右代宫让治", "在餐厅中毒身亡"),
-    (4, "TWILIGHT", "南条医师", "在书房被发现，死因不明"),
-    (5, "TWILIGHT", "右代宫真里亚", "在玫瑰园失踪后被发现身亡"),
-    (5, "TWILIGHT", "右代宫夏妃", "在本馆走廊被发现，身上有刀伤"),
-    (6, "TWILIGHT", "嘉音", "在别馆厨房被发现，中毒身亡"),
-    (6, "TWILIGHT", "纱音", "在客房内被发现，窒息身亡"),
-    (6, "TWILIGHT", "右代宫雾江", "在庭院被发现，身上有枪伤"),
-    (7, "TWILIGHT", "右代宫藏臼", "在地下密室被发现身亡"),
-    (7, "TWILIGHT", "右代宫留弗夫", "在港口被发现，溺亡"),
-    (7, "TWILIGHT", "右代宫楼座", "在神社附近被发现身亡"),
-    (7, "TWILIGHT", "乡田", "在餐厅被发现，中毒身亡"),
-    (7, "TWILIGHT", "熊泽", "在本馆被发现，死因不明"),
-]
-
-# 角色链
-SEAT_CHAINS: Dict[str, List[str]] = {
-    "P1": ["右代宫战人"],
-    "P2": ["右代宫朱志香", "右代宫夏妃", "右代宫藏臼"],
-    "P3": ["右代宫让治", "右代宫雾江", "右代宫留弗夫"],
-    "P4": ["右代宫真里亚", "右代宫楼座"],
-    "P5": ["嘉音", "乡田"],
-    "P6": ["纱音", "熊泽"],
-    "P7": ["右代宫秀吉", "南条医师"],
-}
-
-ROLE_DIRS: Dict[str, str] = {
-    "右代宫战人": "roles/右代宫战人",
-    "右代宫朱志香": "roles/右代宫朱志香",
-    "右代宫夏妃": "roles/右代宫夏妃",
-    "右代宫藏臼": "roles/右代宫藏臼",
-    "右代宫让治": "roles/右代宫让治",
-    "右代宫雾江": "roles/右代宫雾江",
-    "右代宫留弗夫": "roles/右代宫留弗夫",
-    "右代宫真里亚": "roles/右代宫真里亚",
-    "右代宫楼座": "roles/右代宫楼座",
-    "嘉音": "roles/嘉音",
-    "乡田": "roles/乡田",
-    "纱音": "roles/纱音",
-    "熊泽": "roles/熊泽",
-    "右代宫秀吉": "roles/右代宫秀吉",
-    "南条医师": "roles/南条医师",
-    "贝阿朵莉切": "roles/贝阿朵莉切",
-}
-
 
 class DeathEngine:
-    def __init__(self, game_state: GameState, process_manager: ProcessManager, network: NetworkLayer, log_callback=None):
+    def __init__(self, game_state: GameState, process_manager: ProcessManager, network: NetworkLayer, config: Optional[ConfigLoader] = None, log_callback=None):
         self.state = game_state
         self.pm = process_manager
         self.network = network
+        self.config = config
         self._log = log_callback
+
+    def _get_death_schedule(self) -> List[Tuple[int, str, str, str]]:
+        if self.config:
+            raw = self.config.death_schedule
+            if raw:
+                return [(d["day"], d["phase"], d["role"], d["cause"]) for d in raw]
+        return []
+
+    def _get_seat_chains(self) -> Dict[str, List[str]]:
+        if self.config:
+            return self.config.seat_chains
+        return {}
 
     def check_scheduled_deaths(self, day: int, phase: str) -> List[Tuple[str, str]]:
         deaths = []
-        for d, p, role, cause in DEATH_SCHEDULE:
+        for d, p, role, cause in self._get_death_schedule():
             if d == day and p == phase:
                 if role not in self.state.dead_roles:
                     deaths.append((role, cause))
@@ -126,7 +91,7 @@ class DeathEngine:
         seat = self.network.seats.get(seat_id)
         if not seat:
             return
-        chain = SEAT_CHAINS.get(seat_id, [])
+        chain = self._get_seat_chains().get(seat_id, [])
         current_index = -1
         for i, role in enumerate(chain):
             if role == seat.role_name:

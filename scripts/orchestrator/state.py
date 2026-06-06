@@ -388,40 +388,6 @@ class GameState:
             result.append(item_id)
         return result
 
-    def use_item(self, role: str, item_id: str) -> tuple[bool, str, list[str]]:
-        """使用物品。
-        Returns: (成功, 使用描述, 解锁的信息条目列表)
-        """
-        if not self.has_item(role, item_id):
-            return False, "你没有这件物品。", []
-        item = self.item_registry.get(item_id, {})
-        if not item:
-            return False, "未知物品。", []
-
-        unlocked_infos = list(item.get("unlocks_info", []))
-        for info_id in unlocked_infos:
-            self.unlock_info(role, info_id)
-
-        desc = item.get("player_desc", "你使用了这件物品。")
-
-        # 应用状态变化（如果定义了 state_changes）
-        state_changes = item.get("state_changes", {})
-        if state_changes:
-            current_state = self.item_states.get(item_id, {})
-            for key, delta in state_changes.items():
-                if isinstance(delta, (int, float)):
-                    current_state[key] = current_state.get(key, 0) + delta
-                else:
-                    current_state[key] = delta
-            self.item_states[item_id] = current_state
-
-        # 一次性物品使用后移除
-        if item.get("type") == "consumable":
-            self.remove_item(role, item_id)
-            desc += "（物品已消耗）"
-
-        return True, desc, unlocked_infos
-
     def get_item_state(self, item_id: str, key: str, default=None):
         """获取指定物品实例的状态字段。"""
         return self.item_states.get(item_id, {}).get(key, default)

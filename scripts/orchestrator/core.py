@@ -25,7 +25,7 @@ from .action_context import ActionContext
 from .action_engine import ActionEngine, ParsedAction
 from .beatrice_engine import BeatriceEngine
 from .config_loader import ConfigLoader
-from .death_engine import DeathEngine, SEAT_CHAINS
+from .death_engine import DeathEngine
 from .location_engine import LocationEngine
 from .meta_engine import MetaActionEngine, ActionResult
 from .network import NetworkLayer, SeatConnection
@@ -60,13 +60,13 @@ class Orchestrator:
         self.mock_mode = mock_mode
         self.mode = mode
         self.test_mode = test_mode
-        self.active_seats = active_seats or list(SEAT_CHAINS.keys())
+        # 基础设施
+        self.config = ConfigLoader(self.root_dir / "config")
+        self.active_seats = active_seats or list(self.config.seat_chains.keys()) or ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]
         self.min_seats = min_seats or (len(self.active_seats) + 1)
         self.python_exe = python_exe
         self.max_day = max_day
 
-        # 基础设施
-        self.config = ConfigLoader(self.root_dir / "config")
         self.state = GameState()
         # 注入物品注册表（若配置存在则加载，否则为空）
         self.state.item_registry = dict(self.config.items)
@@ -80,8 +80,8 @@ class Orchestrator:
         self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self, config=self.config)
         self.action_engine = ActionEngine(self.state, self.config, self.network)
         self.meta_engine = MetaActionEngine(self.state, self.network)
-        self.npc_engine = NPCEngine(self.state, self.pm)
-        self.death_engine = DeathEngine(self.state, self.pm, self.network, log_callback=self._log_event)
+        self.npc_engine = NPCEngine(self.state, self.pm, config=self.config)
+        self.death_engine = DeathEngine(self.state, self.pm, self.network, config=self.config, log_callback=self._log_event)
         self.beatrice_engine = BeatriceEngine(self.state, self.network)
 
         # 运行时状态
@@ -161,7 +161,7 @@ class Orchestrator:
     async def _start_player_seats(self):
         print(f"[Orchestrator] Starting {len(self.active_seats)} active seats + BEATRICE...")
         for seat_id in self.active_seats:
-            chain = SEAT_CHAINS.get(seat_id, [])
+            chain = self.config.seat_chains.get(seat_id, [])
             if chain:
                 role = chain[0]
                 self.state.alive_roles.add(role)
@@ -454,7 +454,9 @@ class Orchestrator:
 
         # --------------------------------------------------------------
         # 互斥规则：每轮只能执行一个特殊行动（发言/移动可叠加）
-        # 优先级：决斗 > 开枪 > 验尸 > 搜索 > 调查 > 拾取/使用/赠送 > 安慰
+        # 实际处理顺序（非优先级，仅为代码组织）：
+        #   调查 → 开枪 → 威胁 → 验尸 → 搜身 → 拾取 → 赠送 → 安慰
+        # 决斗为剧情关键，在 special_executed 链之后单独处理，始终执行
         # --------------------------------------------------------------
         special_executed = False
 

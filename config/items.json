@@ -79,7 +79,21 @@
       "gm_desc": "金藏从1986年开始的研究笔记，包含三代贝阿朵的身份线索。",
       "location": "书房",
       "day_available": 1,
-      "unlocks_info": ["S-金藏日记", "C-金藏遗书"]
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "阅读日记",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {"op": "unlock_info", "info_id": "S-金藏日记"},
+            {"op": "unlock_info", "info_id": "C-金藏遗书"},
+            {"op": "notify_self", "title": "阅读日记", "body": "你仔细阅读了金藏的日记，发现了关于黄金魔女的重要线索。（解锁信息）", "severity": "info"},
+            {"op": "log_event", "event_type": "ACTION", "message": "{role} 阅读了金藏的日记"}
+          ]
+        }
+      ]
     },
     {
       "id": "master_key",

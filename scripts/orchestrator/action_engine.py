@@ -288,30 +288,6 @@ class ActionEngine:
         desc = self.state.get_item_desc(item_id, gm_view=False)
         return f"【拾取】你获得了 {item_name}。\n{desc}"
 
-    async def execute_use_item(self, role: str, item_hint: str, seat: SeatConnection) -> str:
-        """执行使用物品。item_hint 可以是 item_id 或物品名的一部分。"""
-        # 在角色背包中模糊匹配
-        inventory = self.state.get_inventory(role)
-        matched = None
-        for item_id in inventory:
-            item = self.state.item_registry.get(item_id, {})
-            if item_hint == item_id or item_hint in item.get("name", ""):
-                matched = item_id
-                break
-
-        if not matched:
-            return f"你想使用 '{item_hint}'，但背包中没有这件物品。"
-
-        success, desc, unlocked = self.state.use_item(role, matched)
-        if not success:
-            return desc
-
-        result = f"【使用物品】{desc}"
-        if unlocked:
-            infos = ", ".join(unlocked)
-            result += f"\n（解锁信息: {infos}）"
-        return result
-
     async def execute_gift(self, role: str, target_role: str, item_hint: str, seat: SeatConnection) -> str:
         """执行赠送物品。"""
         if target_role not in self.state.alive_roles:

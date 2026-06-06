@@ -194,3 +194,21 @@ class ConfigLoader:
                 continue
             result.append(item)
         return result
+
+    @property
+    def death_schedule(self) -> List[dict]:
+        """加载预定死亡表。若 death_schedule.json 不存在则返回空列表。"""
+        try:
+            raw = self._load_json("death_schedule.json")
+            return raw.get("deaths", [])
+        except FileNotFoundError:
+            return []
+
+    @property
+    def seat_chains(self) -> Dict[str, List[str]]:
+        """加载角色切换链。若 seat_chains.json 不存在则返回空字典。"""
+        try:
+            raw = self._load_json("seat_chains.json")
+            return raw.get("chains", {})
+        except FileNotFoundError:
+            return {}

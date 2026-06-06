@@ -4,22 +4,28 @@
 管理NPC进程的启动、回收、状态转移。
 """
 
-from typing import Set
+from typing import Optional, Set
 
-from .death_engine import SEAT_CHAINS
+from .config_loader import ConfigLoader
 from .process_manager import ProcessManager
 from .state import GameState
 
 
 class NPCEngine:
-    def __init__(self, game_state: GameState, process_manager: ProcessManager):
+    def __init__(self, game_state: GameState, process_manager: ProcessManager, config: Optional[ConfigLoader] = None):
         self.state = game_state
         self.pm = process_manager
+        self.config = config
+
+    def _get_chains(self) -> dict:
+        if self.config:
+            return self.config.seat_chains
+        return {}
 
     def get_all_playable_roles(self) -> Set[str]:
         """返回所有可扮演角色。"""
         roles = set()
-        for chain in SEAT_CHAINS.values():
+        for chain in self._get_chains().values():
             roles.update(chain)
         # 添加独立NPC角色
         roles.add("右代宫金藏")
@@ -30,7 +36,7 @@ class NPCEngine:
         """返回当前应由NPC控制的角色。"""
         all_roles = self.get_all_playable_roles()
         player_roles = set()
-        for seat_id, chain in SEAT_CHAINS.items():
+        for seat_id, chain in self._get_chains().items():
             if chain:
                 player_roles.add(chain[0])  # 当前玩家控制的角色
         npc_roles = all_roles - player_roles - self.state.dead_roles
