@@ -58,8 +58,8 @@ seat: {seat_id}
 3. 是否提前揭露全局真相
 4. 言行是否符合当前阶段的场景约束
 请给出明确的审查结果：
-【RESULT】approve 或 reject【/RESULT】
-【REASON】简要原因（1-2句）【/REASON】"""
+<result>approve 或 reject</result>
+<reason>简要原因（1-2句）</reason>"""
 
         msg = {
             "type": "action_review",
@@ -74,8 +74,8 @@ seat: {seat_id}
             return {"seat_id": seat_id, "action_text": review.get("action_text", ""), "result": "approve", "reason": "BEATRICE 响应超时，默认通过"}
 
         text = response.get("text", "")
-        result_match = re.search(r"【RESULT】\s*(approve|reject)\s*【/RESULT】", text, re.IGNORECASE)
-        reason_match = re.search(r"【REASON】\s*(.*?)\s*【/REASON】", text, re.DOTALL)
+        result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", text, re.IGNORECASE)
+        reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", text, re.DOTALL)
         return {
             "seat_id": seat_id,
             "action_text": review.get("action_text", ""),
@@ -100,8 +100,8 @@ seat: {seat_id}
 目击者：{', '.join(witnesses) if witnesses else '无'}
 根据三位一体设定：嘉音是守护者人格，纱音是容器人格。守护者必须在容器觉醒前被摧毁。
 请以贝阿朵莉切的身份做出裁决，回复格式：
-【JUDGMENT】kill: 嘉音 或 纱音【/JUDGMENT】
-【REASON】简要原因（1-2句）【/REASON】"""
+<judgment>kill: 嘉音 或 纱音</judgment>
+<reason>简要原因（1-2句）</reason>"""
         msg = {
             "type": "schrodinger_judgment",
             "seat_id": "BEATRICE",
@@ -115,7 +115,7 @@ seat: {seat_id}
         if not isinstance(result, dict):
             return "嘉音"
         text = result.get("text", "")
-        match = re.search(r"【JUDGMENT】\s*kill:\s*(嘉音|纱音)\s*【/JUDGMENT】", text, re.IGNORECASE)
+        match = re.search(r"<judgment>\s*kill:\s*(嘉音|纱音)\s*</judgment>", text, re.IGNORECASE)
         return match.group(1) if match else "嘉音"
 
     def check_schrodinger(self, role: str, location: str) -> Optional[str]:

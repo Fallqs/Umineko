@@ -93,8 +93,8 @@ def _prepare_md_work_dir(
 
 
 def _extract_orchestration_requests(text: str) -> list[dict]:
-    """从 GM 输出中提取 【ORCHESTRATION_REQUEST】块，并去重。"""
-    pattern = r"【ORCHESTRATION_REQUEST】\s*(.*?)\s*【/ORCHESTRATION_REQUEST】"
+    """从 GM 输出中提取 <orchestration_request>块，并去重。"""
+    pattern = r"<orchestration_request>\s*(.*?)\s*</orchestration_request>"
     matches = re.findall(pattern, text, re.DOTALL)
     requests = []
     seen = set()
@@ -118,16 +118,16 @@ def _extract_orchestration_requests(text: str) -> list[dict]:
 
 
 def _extract_player_input(text: str) -> Optional[str]:
-    """提取 【PLAYER_INPUT】块内容（人类模式）。"""
-    pattern = r"【PLAYER_INPUT】\s*(.*?)\s*【/PLAYER_INPUT】"
+    """提取 <player_input>块内容（人类模式）。"""
+    pattern = r"<player_input>\s*(.*?)\s*</player_input>"
     m = re.search(pattern, text, re.DOTALL)
     return m.group(1).strip() if m else None
 
 
 def _strip_blocks(text: str) -> str:
     """移除 orchestration/player_input 块，返回干净文本。"""
-    text = re.sub(r"【ORCHESTRATION_REQUEST】\s*.*?\s*【/ORCHESTRATION_REQUEST】", "", text, flags=re.DOTALL)
-    text = re.sub(r"【PLAYER_INPUT】\s*.*?\s*【/PLAYER_INPUT】", "", text, flags=re.DOTALL)
+    text = re.sub(r"<orchestration_request>\s*.*?\s*</orchestration_request>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<player_input>\s*.*?\s*</player_input>", "", text, flags=re.DOTALL)
     return text.strip()
 
 
@@ -325,7 +325,7 @@ class SeatAgent:
         self, request_id: str, result: str, reason: str, action_text: str, parent_id: str
     ):
         """向 orchestrator 返回 action_review 复核结果（仅 beatrice 模式）。"""
-        text = f"【RESULT】{result}【/RESULT】\n【REASON】{reason}【/REASON】"
+        text = f"<result>{result}</result>\n<reason>{reason}</reason>"
         self._send_to_orchestrator({
             "type": "action_review_result",
             "seat_id": self.seat_id,
@@ -592,8 +592,8 @@ class SeatAgent:
             )
             return
 
-        result_match = re.search(r"【RESULT】\s*(approve|reject)\s*【/RESULT】", out_text, re.IGNORECASE)
-        reason_match = re.search(r"【REASON】\s*(.*?)\s*【/REASON】", out_text, re.DOTALL)
+        result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", out_text, re.IGNORECASE)
+        reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", out_text, re.DOTALL)
         result = result_match.group(1).lower() if result_match else "approve"
         reason = reason_match.group(1).strip() if reason_match else out_text[:200]
 
@@ -680,7 +680,7 @@ class SeatAgent:
             out_text, _, _ = await self.gm.run_once(text)
         except Exception as e:
             print(f"[Agent] [BEATRICE] Judgment error: {e}")
-            out_text = "【JUDGMENT】kill: 嘉音【/JUDGMENT】\n【REASON】裁决异常，默认执行守护者清除协议。"
+            out_text = "<judgment>kill: 嘉音</judgment>\n【REASON】裁决异常，默认执行守护者清除协议。"
         print(f"[Agent] [BEATRICE] Judgment ({msg_id}): {out_text[:120]}...")
         self._send_to_orchestrator({
             "type": "schrodinger_judgment_result",

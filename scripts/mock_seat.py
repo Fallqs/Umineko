@@ -131,7 +131,7 @@ async def mock_beatrice(host: str, port: int):
                     "action_text": action_text,
                     "result": result,
                     "reason": reason,
-                    "text": f"【RESULT】{result}【/RESULT】\n【REASON】{reason}【/REASON】",
+                    "text": f"<result>{result}</result>\n<reason>{reason}</reason>",
                     "id": msg.get("id"),
                 }
                 writer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
