@@ -18,6 +18,22 @@ import argparse
 import asyncio
 import json
 import re
+
+# NPC 角色行为预设（供 npc mode 使用，注入到 GM Session prompt 中）
+NPC_BEHAVIOR_PRESETS: dict[str, str] = {
+    "嘉音": "你是寡言的佣人嘉音。你倾向出现在玫瑰园和本馆，对贝阿朵相关事物敏感，优先调查可疑痕迹。遵守薛定谔规则。",
+    "纱音": "你是勤劳的佣人纱音。你倾向出现在本馆和厨房，关心战人，偶尔会准备食物。遵守薛定谔规则。",
+    "乡田": "你是厨师乡田。你倾向出现在厨房和餐厅，围绕餐饮活动，对食材敏感。",
+    "熊泽": "你是老佣人熊泽。你倾向出现在本馆和庭院，喜欢讲故事（鲭鱼传说），悠闲走动。",
+    "南条医师": "你是南条医师。你倾向出现在书房和客房，医师本职，发现尸体时优先验尸。",
+    "右代宫金藏": "你是家主右代宫金藏。你极少离开书房，研究黑魔法和黄金传说。",
+    "右代宫藏臼": "你是右代宫家长男藏臼。你在本馆和书房之间活动，关注家族利益。",
+    "右代宫夏妃": "你是右代宫夏妃。你在本馆活动，严格管理家务，对佣人要求很高。",
+    "右代宫雾江": "你是右代宫雾江。你在本馆和庭院活动，冷静理性，观察力强。",
+    "右代宫留弗夫": "你是右代宫留弗夫。你在本馆和港口活动，轻浮但观察敏锐。",
+    "右代宫楼座": "你是右代宫楼座。你在本馆和玫瑰园活动，关心女儿真里亚。",
+    "右代宫秀吉": "你是右代宫秀吉。你在本馆和餐厅活动，随和幽默，喜欢美食。",
+}
 import shutil
 import sys
 import tempfile
@@ -236,8 +252,9 @@ class SeatAgent:
         self.gm = SessionWrapper("GM", gm_work_dir, gm_sid)
         await self.gm.init(config, self.model_name, self.thinking, self.yolo)
 
-        # User Session（auto / npc / beatrice 模式）
-        if self.mode in ("auto", "npc", "beatrice"):
+        # User Session（auto / beatrice 模式）
+        # npc 模式：GM 与 User 合并为同一个 Session，不单独创建 User Session
+        if self.mode in ("auto", "beatrice"):
             user_work_dir = _prepare_md_work_dir(
                 self.role_dir,
                 "PLAYER",
@@ -369,6 +386,8 @@ class SeatAgent:
             await self._handle_notification(msg)
         elif msg_type == "spectator_mode":
             await self._handle_spectator_mode(msg)
+        elif msg_type == "inherited_state":
+            await self._handle_inherited_state(msg)
         elif msg_type == "schrodinger_judgment":
             await self._handle_schrodinger_judgment(msg)
         elif msg_type == "player_input":
@@ -477,15 +496,20 @@ class SeatAgent:
 
         prompt = "\n".join(prompt_parts)
 
-        # auto / npc / beatrice 模式：交给 User Session
-        if self.mode in ("auto", "npc", "beatrice") and self.user:
+        # auto / beatrice 模式：交给 User Session
+        if self.mode in ("auto", "beatrice") and self.user:
             await self.user_input_queue.put({"type": "input", "text": prompt, "id": msg_id})
             # 不需要在这里发送 action，_user_loop 会处理
             return
 
-        # human 模式：交给 GM Session 展示上下文
-        if self.mode == "human" and self.gm:
+        # human / npc 模式：直接用 GM Session 生成行动（npc 模式下 GM+User 合并）
+        if self.mode in ("human", "npc") and self.gm:
             try:
+                # npc 模式：在 prompt 中注入角色行为预设
+                if self.mode == "npc":
+                    preset = NPC_BEHAVIOR_PRESETS.get(self.role_dir.name, "")
+                    if preset:
+                        prompt = prompt + f"\n\n【角色定位】{preset}\n\n你是NPC，请直接输出角色行动，不需要解释规则。"
                 out_text, _, _ = await self.gm.run_once(prompt)
                 player_input = _extract_player_input(out_text)
                 if player_input:
@@ -493,7 +517,7 @@ class SeatAgent:
                 else:
                     await self._send_action(msg_id, out_text.strip() or "...（沉默）")
             except Exception as e:
-                print(f"[Agent] [GM] Error handling turn_token: {e}")
+                print(f"[Agent] [{self.mode}] Error handling turn_token: {e}")
                 await self._send_action(msg_id, f"[处理出错: {e}]")
 
         # 回到休眠
@@ -608,7 +632,7 @@ class SeatAgent:
 
         if result == "approve":
             notify_text = f"【GM 审查结果】你的行动已通过。\n原因: {reason}"
-            if self.mode in ("auto", "npc", "beatrice") and self.user:
+            if self.mode in ("auto", "beatrice") and self.user:
                 await self.user_input_queue.put({"type": "input", "text": notify_text, "id": msg_id})
             else:
                 try:
@@ -617,7 +641,7 @@ class SeatAgent:
                     pass
         else:
             reject_base = f"【GM 审查结果】你的行动未通过。\n原因: {reason}\n\n你之前的行动:\n{original_action}\n\n请给出修改建议，让该行动合规。"
-            if self.mode in ("auto", "npc", "beatrice") and self.user and self.gm:
+            if self.mode in ("auto", "beatrice") and self.user and self.gm:
                 try:
                     gm_advice, _, _ = await self.gm.run_once(reject_base)
                 except Exception:
@@ -669,6 +693,32 @@ class SeatAgent:
         if self.user is not None:
             self.user = None
             print(f"[Agent] [{self.seat_id}] User Session disabled in spectator mode")
+
+    async def _handle_inherited_state(self, msg: dict):
+        """接收从NPC继承的状态，更新本地GM Session认知。"""
+        state = msg.get("state", {})
+        role = msg.get("role_name", self.role_dir.name)
+        summary_lines = [f"【系统】你接管了新的角色 {role}。以下是该角色的当前状态："]
+        if "location" in state:
+            summary_lines.append(f"- 当前位置：{state['location']}")
+        if "action_points" in state:
+            summary_lines.append(f"- 剩余行动点：{state['action_points']}")
+        if "unlocked_info" in state:
+            infos = state["unlocked_info"]
+            summary_lines.append(f"- 已收集信息条目：{len(infos)} 条")
+        if "pending_moves" in state and state["pending_moves"]:
+            summary_lines.append(f"- 移动意向：{state['pending_moves']}")
+        if "sleeping" in state and state["sleeping"]:
+            summary_lines.append("- 状态：已选择睡觉")
+        if "night_owl" in state and state["night_owl"]:
+            summary_lines.append("- 状态：选择熬夜（行动消耗2倍）")
+        summary = "\n".join(summary_lines)
+        if self.gm:
+            try:
+                await self.gm.run_once(summary)
+            except Exception as e:
+                print(f"[Agent] [{self.seat_id}] Failed to update GM with inherited state: {e}")
+        print(f"[Agent] [{self.seat_id}] Inherited state for {role}: ap={state.get('action_points')}, loc={state.get('location')}")
 
     async def _handle_schrodinger_judgment(self, msg: dict):
         """贝阿朵模式：对薛定谔违规进行裁决。"""
@@ -757,7 +807,7 @@ class SeatAgent:
             asyncio.create_task(self._orchestrator_reader_loop()),
             asyncio.create_task(self._gm_loop()),
         ]
-        if self.mode in ("auto", "npc", "beatrice") and self.user:
+        if self.mode in ("auto", "beatrice") and self.user:
             tasks.append(asyncio.create_task(self._user_loop()))
 
         try:

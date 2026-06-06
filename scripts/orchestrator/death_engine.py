@@ -4,6 +4,7 @@
 死亡判定、结算分数、角色切换、观剧模式。
 """
 
+import asyncio
 from typing import Dict, List, Optional, Tuple
 
 from .network import NetworkLayer
@@ -106,6 +107,18 @@ class DeathEngine:
             "severity": "error",
         })
 
+    def _collect_role_state(self, role: str) -> dict:
+        """收集角色的当前状态，用于角色切换时继承。"""
+        return {
+            "location": self.state.locations.get(role, "本馆"),
+            "action_points": self.state.action_points.get(role, 50),
+            "unlocked_info": list(self.state.unlocked_info.get(role, set())),
+            "cooldowns": dict(self.state.cooldowns.get(role, {})),
+            "sleeping": role in self.state.sleeping,
+            "night_owl": role in self.state.night_owl,
+            "pending_moves": self.state.pending_moves.get(role, ""),
+        }
+
     async def _switch_role(self, seat_id: str):
         seat = self.network.seats.get(seat_id)
         if not seat:
@@ -127,6 +140,8 @@ class DeathEngine:
         # 回收NPC（如果新角色由NPC控制）
         old_controller = self.state.role_controller.get(new_role)
         if old_controller and old_controller.startswith("NPC_"):
+            # 收集NPC状态 BEFORE 终止
+            self.state.inheritance_pool[new_role] = self._collect_role_state(new_role)
             self.pm.terminate(old_controller)
             self.state.role_controller.pop(new_role, None)
 
@@ -136,6 +151,8 @@ class DeathEngine:
             self.state.action_points[new_role] = 50
         self.state.record_role_for_seat(seat_id, new_role)
         self.state.role_controller[new_role] = seat_id
+        # 清理旧角色的控制映射，避免ghost映射
+        self.state.role_controller.pop(seat.role_name, None)
 
         await self.network.send_and_drain(seat, {
             "type": "notification",
@@ -150,6 +167,8 @@ class DeathEngine:
             seat.writer.close()
         except Exception:
             pass
+        # 从 network.seats 中移除旧对象，避免新进程注册时冲突
+        self.network.seats.pop(seat_id, None)
         await asyncio.sleep(1)
         self.pm.start_seat(seat_id, new_role, "auto", "127.0.0.1", 9123)
 

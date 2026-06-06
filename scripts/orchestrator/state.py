@@ -65,6 +65,9 @@ class GameState:
     spectator_seats: Set[str] = field(default_factory=set)
     ai_seats: Set[str] = field(default_factory=set)
 
+    # 状态继承池：角色名 → 待继承状态（角色切换时使用）
+    inheritance_pool: Dict[str, dict] = field(default_factory=dict)
+
     # 贝阿朵
     beatrice_actions: List[str] = field(default_factory=list)
 

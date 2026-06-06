@@ -93,9 +93,9 @@ class ProcessManager:
         self._subprocesses[seat_id] = proc
 
     def start_npc(self, role_name: str, host: str, port: int) -> None:
-        """启动NPC进程，seat_id格式为 NPC_{角色名}。"""
+        """启动NPC进程，seat_id格式为 NPC_{角色名}，使用npc模式（GM+User合并）。"""
         seat_id = f"NPC_{role_name}"
-        self.start_seat(seat_id, role_name, "auto", host, port)
+        self.start_seat(seat_id, role_name, "npc", host, port)
 
     def terminate(self, seat_id: str) -> None:
         proc = self._subprocesses.pop(seat_id, None)

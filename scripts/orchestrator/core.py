@@ -84,7 +84,7 @@ class Orchestrator:
         self._game_start_triggered = False
 
         # AI seats
-        self.state.ai_seats = set(ai_seats) if ai_seats else (set(self.active_seats) if mode == "auto" else set())
+        self.state.ai_seats = set(ai_seats) if ai_seats is not None else (set(self.active_seats) if mode == "auto" else set())
 
     @staticmethod
     def _normalize_python_path(path: str) -> str:
@@ -180,6 +180,37 @@ class Orchestrator:
                 if role not in self.state.action_points:
                     self.state.action_points[role] = 50
                 self.state.alive_roles.add(role)
+
+        # 状态继承：如果该角色有待继承状态，发送给新进程并写回GameState
+        inherited = self.state.inheritance_pool.pop(role, None)
+        if inherited and seat.alive:
+            await self.network.send_and_drain(seat, {
+                "type": "inherited_state",
+                "seat_id": seat.seat_id,
+                "role_name": role,
+                "state": inherited,
+            })
+            # 将继承的状态写回GameState（覆盖on_register中的默认值）
+            if "location" in inherited:
+                self.state.locations[role] = inherited["location"]
+            if "action_points" in inherited:
+                self.state.action_points[role] = inherited["action_points"]
+            if "unlocked_info" in inherited:
+                for info_id in inherited["unlocked_info"]:
+                    self.state.unlock_info(role, info_id)
+            if "cooldowns" in inherited:
+                self.state.cooldowns[role] = inherited["cooldowns"]
+            if "sleeping" in inherited and inherited["sleeping"]:
+                self.state.sleeping.add(role)
+            else:
+                self.state.sleeping.discard(role)
+            if "night_owl" in inherited and inherited["night_owl"]:
+                self.state.night_owl.add(role)
+            else:
+                self.state.night_owl.discard(role)
+            if "pending_moves" in inherited and inherited["pending_moves"]:
+                self.state.pending_moves[role] = inherited["pending_moves"]
+            print(f"[Orchestrator] {seat.seat_id}({role}) 继承了状态: {inherited}")
 
         # 检查是否满足最小seat数，触发游戏开始
         if not self._game_start_triggered:
