@@ -464,6 +464,17 @@ class SeatAgent:
             "请用自然语言描述你的行动，例如：\"我仔细调查了书房的每个角落\"或\"我走向餐厅\"。"
             "如果你希望下个时间点移动到其他地点，请在描述末尾声明：\"下轮移动：{地点名}\""
         )
+
+        # 贝阿朵莉切特殊能力：红字/金字
+        if self.role_dir.name == "贝阿朵莉切":
+            prompt_parts.append(
+                "\n\n【特殊能力：红字与金字】"
+                "你是黄金魔女贝阿朵莉切。你可以在发言中使用以下 XML 标签："
+                "<red>绝对真实的陈述</red> —— 红字，一旦声明即为真实，不可反驳。"
+                "<gold>无需证明的真理</gold> —— 金字，比红字更高位的绝对真理。"
+                "你的 GM Session 会确保 red/gold 标签内的内容绝对真实，不要声明与已知真相矛盾的 red/gold 内容。"
+            )
+
         prompt = "\n".join(prompt_parts)
 
         # auto / npc / beatrice 模式：交给 User Session

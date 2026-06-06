@@ -99,6 +99,15 @@ class ActionEngine:
             self.state.pending_moves[role] = target
 
     @staticmethod
+    def parse_red_truth(text: str) -> tuple[list[str], list[str]]:
+        """从文本中提取红字和金字声明（XML 标签格式）。
+        返回: (红字列表, 金字列表)
+        """
+        red = re.findall(r"<red>\s*(.*?)\s*</red>", text, re.IGNORECASE)
+        gold = re.findall(r"<gold>\s*(.*?)\s*</gold>", text, re.IGNORECASE)
+        return red, gold
+
+    @staticmethod
     def _get_info_points(info_id: str) -> int:
         for prefix, pts in {"P-": 1, "S-": 2, "C-": 4}.items():
             if info_id.startswith(prefix):
