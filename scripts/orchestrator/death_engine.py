@@ -62,10 +62,11 @@ ROLE_DIRS: Dict[str, str] = {
 
 
 class DeathEngine:
-    def __init__(self, game_state: GameState, process_manager: ProcessManager, network: NetworkLayer):
+    def __init__(self, game_state: GameState, process_manager: ProcessManager, network: NetworkLayer, log_callback=None):
         self.state = game_state
         self.pm = process_manager
         self.network = network
+        self._log = log_callback
 
     def check_scheduled_deaths(self, day: int, phase: str) -> List[Tuple[str, str]]:
         deaths = []
@@ -88,6 +89,8 @@ class DeathEngine:
         seat = self.network.seats[seat_id]
         is_ai = seat_id in self.state.ai_seats or seat_id.startswith("NPC_")
         print(f"\n[DeathEngine] ☠️ {role_name} ({seat_id}) 死亡: {cause} | 规则得分: {score} | AI={is_ai}\n")
+        if self._log:
+            self._log("DEATH", f"{role_name} ({seat_id}): {cause} | 规则得分: {score}")
 
         await self._notify_death(seat, role_name, cause, score)
 
@@ -136,12 +139,16 @@ class DeathEngine:
 
         new_role = chain[next_index]
         print(f"[DeathEngine] {seat_id} 切换角色: {seat.role_name} -> {new_role}")
+        if self._log:
+            self._log("SWITCH", f"{seat_id}: {seat.role_name} -> {new_role}")
 
         # 回收NPC（如果新角色由NPC控制）
         old_controller = self.state.role_controller.get(new_role)
         if old_controller and old_controller.startswith("NPC_"):
             # 收集NPC状态 BEFORE 终止
             self.state.inheritance_pool[new_role] = self._collect_role_state(new_role)
+            if self._log:
+                self._log("SWITCH", f"回收NPC {old_controller}({new_role})，状态已保存到继承池")
             self.pm.terminate(old_controller)
             self.state.role_controller.pop(new_role, None)
 
@@ -177,6 +184,8 @@ class DeathEngine:
         if not seat:
             return
         print(f"[DeathEngine] {seat_id} 转为观察者模式")
+        if self._log:
+            self._log("SWITCH", f"{seat_id} 角色链耗尽，转为观察者模式")
         self.state.mark_spectator(seat_id)
         self.state.mark_eliminated(seat_id)
         await self.network.send_and_drain(seat, {

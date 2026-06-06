@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import random
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -75,7 +76,7 @@ class Orchestrator:
         self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self)
         self.action_engine = ActionEngine(self.state, self.config, self.network)
         self.npc_engine = NPCEngine(self.state, self.pm)
-        self.death_engine = DeathEngine(self.state, self.pm, self.network)
+        self.death_engine = DeathEngine(self.state, self.pm, self.network, log_callback=self._log_event)
         self.beatrice_engine = BeatriceEngine(self.state, self.network)
 
         # 运行时状态
@@ -83,8 +84,25 @@ class Orchestrator:
         self.turn_counter = 0
         self._game_start_triggered = False
 
+        # 叙事日志文件
+        self._log_file = self.root_dir / "shared" / "logs" / "narrative.log"
+        self._log_file.parent.mkdir(parents=True, exist_ok=True)
+        self._log_file.write_text(f"=== 海猫鸣泣之时：六轩岛黄昏 叙事日志 ===\n启动时间: {datetime.now().isoformat()}\n\n", encoding="utf-8")
+
         # AI seats
         self.state.ai_seats = set(ai_seats) if ai_seats is not None else (set(self.active_seats) if mode == "auto" else set())
+
+    def _log_event(self, event_type: str, content: str) -> None:
+        """记录叙事日志，同时写入文件和内存列表。"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        entry = f"[Day{self.state.day} {self.state.phase}] [{timestamp}] [{event_type}] {content}"
+        self.narrative_log.append(entry)
+        try:
+            with open(self._log_file, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
+        except Exception as e:
+            print(f"[Orchestrator] 日志写入失败: {e}")
+        print(entry)
 
     @staticmethod
     def _normalize_python_path(path: str) -> str:
@@ -259,6 +277,7 @@ class Orchestrator:
 
     async def on_dawn(self) -> None:
         print("[Orchestrator] ☀️ DAWN: 清晨到来...")
+        self._log_event("SYSTEM", f"===== DAWN Day{self.state.day} =====")
         self.state.reset_action_points()
         self.state.sleeping.clear()
         self.state.night_owl.clear()
@@ -266,31 +285,38 @@ class Orchestrator:
             self.state.locations[role] = "本馆"
         deaths = self.death_engine.check_scheduled_deaths(self.state.day, self.state.phase)
         if deaths:
+            for role, cause in deaths:
+                self._log_event("DEATH", f"{role}: {cause}")
             death_text = "\n".join([f"☠️ {r}: {c}" for r, c in deaths])
             await self._broadcast_notification("清晨事件", f"发现了新的死亡：\n{death_text}", severity="error")
         else:
             await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
+        self._log_event("SYSTEM", f"行动点重置为50，存活: {sorted(self.state.alive_roles)}")
         print(f"[Orchestrator] DAWN 完成，行动点已重置为50")
 
     async def on_free_slot(self, slot: str) -> None:
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
         if not active_roles:
             print(f"[Orchestrator] {slot}: 无活跃角色，跳过")
+            self._log_event("SYSTEM", f"{slot}: 无活跃角色，跳过")
             return
         groups = self.location_engine.group_by_location(active_roles)
         locations = list(groups.keys())
         random.shuffle(locations)
         print(f"[Orchestrator] {slot}: 活跃地点 {locations}")
+        self._log_event("SYSTEM", f"{slot} 开始，活跃地点: {locations}")
         for loc in locations:
             await self.token_ring.run(loc, groups[loc], slot, rounds=2)
         moves = self.location_engine.resolve_pending_moves()
         for role, frm, to, success in moves:
             status = "成功" if success else "失败"
             print(f"[Orchestrator] 🚶 {role}: {frm} -> {to} ({status})")
+            self._log_event("MOVE", f"{role}: {frm} -> {to} ({status})")
 
     async def on_meal_slot(self, slot: str) -> None:
         meal_name = {"BREAKFAST": "早饭", "LUNCH": "午饭", "DINNER": "晚饭"}.get(slot, slot)
         print(f"[Orchestrator] 🍽️ {slot}: {meal_name}时间，强制回本馆...")
+        self._log_event("SYSTEM", f"{slot} {meal_name}时间，强制移动到餐厅")
         for role in self.state.alive_roles:
             if role not in self.state.sleeping:
                 self.state.locations[role] = "餐厅"
@@ -301,19 +327,20 @@ class Orchestrator:
 
     async def on_sleep_check(self) -> None:
         print("[Orchestrator] 🌙 SLEEP_CHECK: 询问是否睡觉...")
+        self._log_event("SYSTEM", "SLEEP_CHECK: 选择睡觉或熬夜")
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
         for role in active_roles:
             seat_id = self.state.role_controller.get(role)
             if not seat_id:
                 continue
             is_ai = seat_id in self.state.ai_seats or seat_id.startswith("NPC_")
-            # AI默认不睡觉（简化）
             if is_ai:
                 self.state.night_owl.add(role)
             else:
                 self.state.night_owl.add(role)
         night_owls = sorted(self.state.night_owl)
         if night_owls:
+            self._log_event("SYSTEM", f"熬夜角色: {night_owls}")
             await self._broadcast_notification(
                 "深夜选择",
                 f"以下角色选择继续行动（消耗2倍行动点）：{', '.join(night_owls)}",
@@ -322,6 +349,7 @@ class Orchestrator:
 
     async def on_midnight(self) -> None:
         print("[Orchestrator] 🌑 MIDNIGHT: 深夜...")
+        self._log_event("SYSTEM", f"MIDNIGHT: 第{self.state.day}天结束")
         await self._broadcast_notification(
             "深夜",
             f"第{self.state.day}天结束了。明天将是第{self.state.day + 1}天...",
@@ -343,6 +371,9 @@ class Orchestrator:
 
         parsed = self.action_engine.parse(action_text)
 
+        # 记录完整行动（不截断）
+        self._log_event("ACTION", f"{role} (@{location}): {action_text}")
+
         # 调查
         if parsed.investigate:
             base_cost = 2
@@ -353,19 +384,23 @@ class Orchestrator:
                     await self.network.send_and_drain(seat, {
                         "type": "notification", "title": "调查发现", "body": info, "severity": "info"
                     })
+                    self._log_event("INVESTIGATE", f"{role} 在{location}: {info}")
             else:
                 await self.network.send_and_drain(seat, {
                     "type": "notification", "title": "行动失败", "body": "行动点不足，无法调查。", "severity": "warning"
                 })
+                self._log_event("ACTION", f"{role} 调查失败（行动点不足）")
 
         # 发言
         if parsed.speech:
             await self.action_engine.broadcast_speech(role, parsed.speech, location)
+            self._log_event("SPEECH", f'{role} (@{location}): "{parsed.speech}"')
 
         # 移动意向
         next_move = parsed.next_move or action_msg.get("next_move")
         if next_move:
             self.action_engine.handle_move_intent(role, next_move)
+            self._log_event("MOVE_INTENT", f"{role} 计划移动到: {next_move}")
 
         # 决斗
         if parsed.duel_beatrice and role in ("嘉音", "纱音"):
@@ -390,6 +425,7 @@ class Orchestrator:
         match = __import__('re').search(r"出现在(.+)$", issue)
         loc = match.group(1) if match else "本馆"
         self.beatrice_engine.teleport_beatrice(loc)
+        self._log_event("SCHRODINGER", f"嘉音和纱音同时出现在{loc}，薛定谔崩溃")
         await self._broadcast_notification(
             "薛定谔崩溃",
             f"嘉音和纱音同时出现在{loc}！贝阿朵莉切瞬移至此进行裁决...",
@@ -398,6 +434,7 @@ class Orchestrator:
         victim = await self.beatrice_engine.request_judgment(issue, [])
         if victim in self.state.alive_roles:
             score = self.state.mark_dead(victim)
+            self._log_event("SCHRODINGER", f"贝阿朵裁决: {victim} 被抹杀")
             self.narrative_log.append(f"Day{self.state.day} {self.state.phase}: {victim} 因薛定谔崩溃被贝阿朵抹杀")
             await self._broadcast_notification(
                 "贝阿朵的裁决",
@@ -409,6 +446,7 @@ class Orchestrator:
     async def _handle_duel(self, role: str, location: str):
         other = "纱音" if role == "嘉音" else "嘉音"
         print(f"[Orchestrator] ⚔️ {role} 向贝阿朵发起决斗！{other}将存活...")
+        self._log_event("DUEL", f"{role} 向贝阿朵发起决斗，{other}存活")
         await self._broadcast_notification(
             "决斗",
             f"【{role}】向贝阿朵莉切发起了决斗！\n{role} 献出了自己的生命，{other} 得以继续存活。",
