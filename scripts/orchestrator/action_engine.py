@@ -179,9 +179,9 @@ class ActionEngine:
             result.duel_beatrice = True
 
         # 即时移动
-        move_match = re.search(r"(?:移动到|前往|去|走向)[：:]?\s*(\S+)", text)
+        move_match = re.search(r"(?:移动到|前往|去|走向)[了：:]?\s*(\S+)", text)
         if move_match:
-            result.move_target = move_match.group(1).strip()
+            result.move_target = move_match.group(1).strip().rstrip(chr(34) + "'()[]{}.,!?;:。，！？、；：")
 
         # 大喊（<shout> XML 标签）
         shout_match = re.search(r"<shout>\s*(.+?)\s*</shout>", text, re.IGNORECASE)
@@ -189,9 +189,9 @@ class ActionEngine:
             result.shout_text = shout_match.group(1).strip()
 
         # 进入藏匿点
-        hide_match = re.search(r"(?:躲进|藏到|藏入|进入|躲到)[：:]?\s*(\S+)", text)
+        hide_match = re.search(r"(?:躲进|藏到|藏入|进入|躲到)[了：:]?\s*(\S+)", text)
         if hide_match:
-            result.hide_in = hide_match.group(1).strip()
+            result.hide_in = hide_match.group(1).strip().rstrip(chr(34) + "'()[]{}.,!?;:。，！？、；：")
 
         # 离开藏匿点
         if any(k in text for k in ["离开藏身处", "出来", "从藏身处出来", "离开隐藏点"]):

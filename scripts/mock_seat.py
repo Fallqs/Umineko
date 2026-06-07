@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
-"""Mock seat agent for testing orchestrator TCP flow."""
+"""Mock seat agent for testing orchestrator TCP flow (v2, 适配全局序列+即时移动+距离广播+藏匿)."""
 
 import argparse
 import asyncio
 import json
 import random
+
+
+LOCATIONS = ["本馆", "别馆", "玫瑰园", "庭院", "书房", "餐厅", "厨房", "客房", "神社", "港口"]
+HIDING_SPOTS = ["大衣柜"]  # 简化版，只按名称匹配
+
+
+def safe_print(text: str) -> None:
+    """安全打印，处理Windows终端编码问题。"""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        try:
+            print(text.encode("gbk", "replace").decode("gbk"))
+        except Exception:
+            pass
 
 
 async def mock_seat(seat_id: str, role_name: str, host: str, port: int, mode: str = "auto"):
@@ -18,7 +33,7 @@ async def mock_seat(seat_id: str, role_name: str, host: str, port: int, mode: st
     }, ensure_ascii=False) + "\n").encode("utf-8"))
     await writer.drain()
 
-    print(f"[{seat_id}] Registered")
+    safe_print(f"[{seat_id}] Registered as role={role_name!r}")
 
     async def read_loop():
         while True:
@@ -30,34 +45,63 @@ async def mock_seat(seat_id: str, role_name: str, host: str, port: int, mode: st
             except json.JSONDecodeError:
                 continue
             msg_type = msg.get("type")
-            print(f"[{seat_id}] <- {msg_type} {msg.get('id', '')}")
+            safe_print(f"[{seat_id}] <- {msg_type} {msg.get('id', '')}")
 
             if msg_type == "turn_token":
-                # 新版：收到turn_token后返回action
                 await asyncio.sleep(0.2)
                 location = msg.get("location", "本馆")
-                actions = [
-                    f"我仔细调查了{location}的每个角落，发现了一些有趣的痕迹。",
-                    f"我在{location}四处张望，然后对旁边的人说：\"这里似乎有些不对劲。\"",
-                    f"我决定在{location}静观其变，暂时不采取行动。",
-                    f"我搜索了{location}，在角落里发现了一本旧日记。",
+                nearby = msg.get("nearby_players", [])
+                investigations_remaining = msg.get("investigations_remaining", 0)
+
+                # 构建智能mock行动
+                choices = []
+
+                # 基础发言
+                speeches = [
+                    f"我环顾{location}，感觉气氛有些紧张。",
+                    f"\"这里似乎有些不对劲...\" 我低声说道。",
+                    f"我仔细观察着{location}的每个角落。",
                 ]
-                action_text = random.choice(actions)
-                next_move = None
-                if random.random() < 0.3:
-                    next_move = random.choice(["本馆", "别馆", "玫瑰园", "庭院", "书房"])
-                    action_text += f'\n下轮移动：{next_move}'
+                if nearby:
+                    speeches.append(f"\"{'、'.join(nearby)}，你们觉得呢？\"")
+                choices.append(("speech", random.choice(speeches)))
+
+                # 偶尔大喊（range=1）
+                if random.random() < 0.15:
+                    choices.append(("shout", f"<shout>有人在吗！</shout>"))
+
+                # 调查/移动/互动（如果还有调查次数）
+                if investigations_remaining > 0:
+                    if random.random() < 0.4:
+                        choices.append(("investigate", f"我仔细调查了{location}的每个角落，发现了一些有趣的痕迹。"))
+                    if random.random() < 0.25:
+                        target = random.choice([l for l in LOCATIONS if l != location])
+                        choices.append(("move", f"我快步走向{target}。\n移动到：{target}"))
+                    if random.random() < 0.15:
+                        choices.append(("hide", f"我迅速躲进了大衣柜。"))
+                    if random.random() < 0.1:
+                        choices.append(("pickup", "我捡起地上的物品，仔细检查。"))
+
+                # 组合1-3个行动
+                num_actions = random.randint(1, min(3, len(choices)))
+                selected = random.sample(choices, num_actions)
+
+                action_parts = []
+                for action_type, text in selected:
+                    action_parts.append(text)
+
+                action_text = "\n".join(action_parts)
+
                 resp = {
                     "type": "action",
                     "seat_id": seat_id,
                     "parent_id": msg.get("id"),
                     "action_text": action_text,
-                    "next_move": next_move,
                     "id": f"action_{seat_id}_{random.randint(1000,9999)}",
                 }
                 writer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
-                print(f"[{seat_id}] -> action")
+                safe_print(f"[{seat_id}] -> action ({len(selected)} parts)")
 
             elif msg_type == "scene":
                 # 旧版兼容
@@ -72,14 +116,14 @@ async def mock_seat(seat_id: str, role_name: str, host: str, port: int, mode: st
                 }
                 writer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
-                print(f"[{seat_id}] -> gm_output")
+                safe_print(f"[{seat_id}] -> gm_output")
 
             elif msg_type == "action_review_result":
                 result = msg.get("result")
-                print(f"[{seat_id}] Review result: {result} - {msg.get('reason', '')[:60]}")
+                safe_print(f"[{seat_id}] Review result: {result} - {msg.get('reason', '')[:60]}")
 
             elif msg_type == "notification":
-                print(f"[{seat_id}] Notification: {msg.get('title')} - {msg.get('body')[:80]}")
+                safe_print(f"[{seat_id}] Notification: {msg.get('title')} - {msg.get('body')[:80]}")
 
     try:
         await read_loop()
@@ -98,7 +142,7 @@ async def mock_beatrice(host: str, port: int):
         "role_name": "贝阿朵莉切",
     }, ensure_ascii=False) + "\n").encode("utf-8"))
     await writer.drain()
-    print("[BEATRICE] Registered")
+    safe_print("[BEATRICE] Registered")
 
     async def read_loop():
         while True:
@@ -110,7 +154,7 @@ async def mock_beatrice(host: str, port: int):
             except json.JSONDecodeError:
                 continue
             msg_type = msg.get("type")
-            print(f"[BEATRICE] <- {msg_type} {msg.get('id', '')}")
+            safe_print(f"[BEATRICE] <- {msg_type} {msg.get('id', '')}")
 
             if msg_type == "action_review":
                 await asyncio.sleep(0.1)
@@ -136,10 +180,10 @@ async def mock_beatrice(host: str, port: int):
                 }
                 writer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
-                print(f"[BEATRICE] -> action_review_result: {result}")
+                safe_print(f"[BEATRICE] -> action_review_result: {result}")
 
             elif msg_type == "turn_token":
-                # BEATRICE也参与令牌环
+                # BEATRICE也参与全局令牌环
                 await asyncio.sleep(0.1)
                 resp = {
                     "type": "action",
@@ -150,7 +194,7 @@ async def mock_beatrice(host: str, port: int):
                 }
                 writer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
                 await writer.drain()
-                print("[BEATRICE] -> action")
+                safe_print("[BEATRICE] -> action")
 
             elif msg_type == "scene":
                 resp = {
