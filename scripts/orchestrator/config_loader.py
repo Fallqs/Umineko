@@ -132,6 +132,16 @@ class ConfigLoader:
         """获取令牌环规则。"""
         return self.game_rules.get("token_ring", {}).get(key, default)
 
+    def get_action_range(self, action_id: str) -> int:
+        """获取行动的作用距离。优先级：物品action定义 > game_rules.action_ranges > 0"""
+        # 1. 物品action定义中查找range
+        for item in self.items.values():
+            for action_def in item.get("granted_actions", []):
+                if action_def.get("id") == action_id and "range" in action_def:
+                    return int(action_def["range"])
+        # 2. game_rules.action_ranges中查找
+        return self.game_rules.get("action_ranges", {}).get(action_id, 0)
+
     def get_info_points(self, info_id: str) -> int:
         """根据信息ID前缀获取分值。"""
         for prefix, pts in self.game_rules.get("info_points", {}).items():

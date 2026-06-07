@@ -18,12 +18,26 @@ class ParsedAction:
     investigate: bool = False
     speech: str = ""
     skip: bool = False
-    next_move: Optional[str] = None
     duel_beatrice: bool = False
+    # 移动（即时）
+    move_target: Optional[str] = None       # 即时移动目标地点
+    # 大喊
+    shout_text: Optional[str] = None        # <shout>标签提取内容
+    # 藏匿
+    hide_in: Optional[str] = None           # 躲进的藏匿点名
+    leave_hideout: bool = False             # 是否离开藏身处
     # 物品相关（Phase B）
     pickup: bool = False              # 拾取地点物品
+    drop: bool = False                # 丢弃物品
+    drop_item: Optional[str] = None   # 要丢弃的物品（item_id 或名称片段）
     gift_target: Optional[str] = None # 赠送目标角色
     gift_item: Optional[str] = None   # 赠送物品（item_id 或名称片段）
+    # 可见性切换
+    toggle_visibility_item: Optional[str] = None    # 要切换可见性的物品
+    toggle_visibility_target: Optional[str] = None  # "visible" 或 "hidden"
+    # 容器操作
+    open_container: Optional[str] = None            # 要打开的容器物品名
+    close_container: Optional[str] = None           # 要关闭的容器物品名
     # 玩家互动（Phase C）
     investigate_target: Optional[str] = None  # 调查特定玩家
     search_target: Optional[str] = None       # 搜身目标
@@ -111,6 +125,40 @@ class ActionEngine:
         if any(k in text for k in ["捡起", "拾取", "拿取", "带走", "拿起来"]):
             result.pickup = True
 
+        # 丢弃物品
+        if any(k in text for k in ["丢弃", "丢掉", "放下", "扔下", "扔", "丢"]):
+            result.drop = True
+            # 尝试提取丢弃的物品名
+            drop_match = re.search(r"(?:丢弃|丢掉|放下|扔下|扔|丢)\s*(?:了|掉)?\s*(.+?)(?:\s|$)", text)
+            if drop_match:
+                result.drop_item = drop_match.group(1).strip()
+
+        # 切换持有物品可见性
+        vis_keywords_show = ["展示", "亮出", "掏出", "拔出", "取出"]
+        vis_keywords_hide = ["收起", "藏起", "隐藏"]
+        if any(k in text for k in vis_keywords_show):
+            vis_match = re.search(r"(?:展示|亮出|掏出|拔出|取出)\s*(?:了|出)?\s*(.+?)(?:\s|$)", text)
+            if vis_match:
+                result.toggle_visibility_item = vis_match.group(1).strip()
+                result.toggle_visibility_target = "visible"
+        if any(k in text for k in vis_keywords_hide):
+            vis_match = re.search(r"(?:收起|藏起|隐藏)\s*(?:了|起)?\s*(.+?)(?:\s|$)", text)
+            if vis_match:
+                result.toggle_visibility_item = vis_match.group(1).strip()
+                result.toggle_visibility_target = "hidden"
+
+        # 打开容器
+        if any(k in text for k in ["打开", "开启"]):
+            open_match = re.search(r"(?:打开|开启)\s*(.+?)(?:\s|$)", text)
+            if open_match:
+                result.open_container = open_match.group(1).strip()
+
+        # 关闭容器
+        if any(k in text for k in ["关闭", "关上", "合上"]):
+            close_match = re.search(r"(?:关闭|关上|合上)\s*(.+?)(?:\s|$)", text)
+            if close_match:
+                result.close_container = close_match.group(1).strip()
+
         # 赠送物品——解析具体物品和目标（"把X给Y" 或 "给Y X"）
         gift_match = re.search(r"(?:把|将)\s*(.+?)\s*(?:给|交给|赠送)\s*(\S+)", text)
         if gift_match:
@@ -130,10 +178,28 @@ class ActionEngine:
         if "决斗" in text and "贝阿朵" in text:
             result.duel_beatrice = True
 
-        # 移动意向
-        m = re.search(r"下轮移动[：:]\s*(\S+)", text)
-        if m:
-            result.next_move = m.group(1).strip()
+        # 即时移动
+        move_match = re.search(r"(?:移动到|前往|去|走向)[：:]?\s*(\S+)", text)
+        if move_match:
+            result.move_target = move_match.group(1).strip()
+
+        # 大喊（<shout> XML 标签）
+        shout_match = re.search(r"<shout>\s*(.+?)\s*</shout>", text, re.IGNORECASE)
+        if shout_match:
+            result.shout_text = shout_match.group(1).strip()
+
+        # 进入藏匿点
+        hide_match = re.search(r"(?:躲进|藏到|藏入|进入|躲到)[：:]?\s*(\S+)", text)
+        if hide_match:
+            result.hide_in = hide_match.group(1).strip()
+
+        # 离开藏匿点
+        if any(k in text for k in ["离开藏身处", "出来", "从藏身处出来", "离开隐藏点"]):
+            result.leave_hideout = True
+        else:
+            leave_match = re.search(r"(?:从|离开)\s*(\S+)\s*(?:出来|出来|离开)", text)
+            if leave_match:
+                result.leave_hideout = True
 
         # 发言（提取引号内容）
         speeches = re.findall(r'["""]([^"""]+)["""]', text)
@@ -190,7 +256,7 @@ class ActionEngine:
 
         # 物品前置（预留接口，Phase B 完整实现 inventory 后自动生效）
         if "items" in requires:
-            inventory = getattr(self.state, "inventory", {}).get(role, set())
+            inventory = getattr(self.state, "containers", {}).get(role, set())
             missing_items = [item for item in requires["items"] if item not in inventory]
             if missing_items:
                 return False, f"需持有物品: {', '.join(missing_items)}"
@@ -228,47 +294,55 @@ class ActionEngine:
         points = self._get_info_points(iid)
         return f"【调查成功】你发现了新的线索！\n{iid}: {desc}\n（获得 {points} 分）"
 
-    async def broadcast_speech(self, speaker_role: str, speech: str, location: str) -> None:
+    def _is_within_range(self, actor_role: str, target_role: str, range_limit: int) -> bool:
+        """检查目标是否在行动者的作用距离内。"""
+        actor_loc = self.state.locations.get(actor_role)
+        target_loc = self.state.locations.get(target_role)
+        if actor_loc == target_loc:
+            return True
+        if actor_loc is None or target_loc is None:
+            return False
+        return self.config.get_distance(actor_loc, target_loc) <= range_limit
+
+    async def broadcast_speech(self, speaker_role: str, speech: str, range_limit: int = 0) -> None:
         if not speech:
             return
         body = f"【{speaker_role}】{speech}"
         for role, seat_id in self.state.role_controller.items():
-            if self.state.locations.get(role) == location:
-                seat = self.network.seats.get(seat_id)
-                if seat and seat.alive:
-                    await self.network.send_and_drain(seat, {
-                        "type": "notification",
-                        "title": "同场发言",
-                        "body": body,
-                        "location": location,
-                    })
+            if role == speaker_role:
+                continue
+            if not self._is_within_range(speaker_role, role, range_limit):
+                continue
+            seat = self.network.seats.get(seat_id)
+            if seat and seat.alive:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification",
+                    "title": "同场发言",
+                    "body": body,
+                })
 
-    async def broadcast_action_visibility(self, actor_role: str, action_desc: str, location: str, exclude_role: Optional[str] = None) -> None:
-        """广播行为可见性：通知同地点其他角色有人正在做某事。
+    async def broadcast_action_visibility(self, actor_role: str, action_desc: str, range_limit: int = 0, exclude_role: Optional[str] = None) -> None:
+        """广播行为可见性：通知范围内的其他角色有人正在做某事。
 
         Args:
             actor_role: 行动者角色名
             action_desc: 行为描述（如"正在仔细调查餐厅的每个角落"）
-            location: 地点
-            exclude_role: 排除的角色（通常是行动者本人，避免自己收到自己的行动通知）
+            range_limit: 作用距离（0=同地点，1=相邻，2=更远）
+            exclude_role: 排除的角色（通常是行动者本人）
         """
         body = f"{actor_role}{action_desc}"
         for role, seat_id in self.state.role_controller.items():
             if role == exclude_role:
                 continue
-            if self.state.locations.get(role) == location:
-                seat = self.network.seats.get(seat_id)
-                if seat and seat.alive:
-                    await self.network.send_and_drain(seat, {
-                        "type": "notification",
-                        "title": "同场事件",
-                        "body": body,
-                        "location": location,
-                    })
-
-    def handle_move_intent(self, role: str, target: str) -> None:
-        if target in self.config.locations:
-            self.state.pending_moves[role] = target
+            if not self._is_within_range(actor_role, role, range_limit):
+                continue
+            seat = self.network.seats.get(seat_id)
+            if seat and seat.alive:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification",
+                    "title": "同场事件",
+                    "body": body,
+                })
 
     # ------------------------------------------------------------------
     # 物品操作（Phase B）
@@ -294,7 +368,7 @@ class ActionEngine:
             return f"{target_role} 不在这里或已死亡，无法赠送。"
 
         # 模糊匹配物品
-        inventory = self.state.get_inventory(role)
+        inventory = self.state.get_container_items(role)
         matched = None
         for item_id in inventory:
             item = self.state.item_registry.get(item_id, {})
@@ -332,7 +406,7 @@ class ActionEngine:
             return f"{target} 不在这里或已死亡。"
         target_loc = self.state.locations.get(target, "未知")
         target_ap = self.state.action_points.get(target, 0)
-        has_items = len(self.state.get_inventory(target)) > 0
+        has_items = len(self.state.get_container_items(target)) > 0
         item_hint = "似乎携带了什么东西" if has_items else "身上看起来空空如也"
         return (
             f"【观察 {target}】\n"
@@ -352,7 +426,7 @@ class ActionEngine:
         if not success:
             return f"你试图搜查 {target}，但被他/她察觉并避开了。"
 
-        items = self.state.get_inventory(target)
+        items = self.state.get_container_items(target)
         if items:
             item_names = [self.state.item_registry.get(iid, {}).get("name", iid) for iid in items]
             return f"【搜身成功】你从 {target} 身上发现了：{', '.join(item_names)}"
@@ -383,7 +457,7 @@ class ActionEngine:
 
         # 查找可射击武器（优先查找有 ammo 状态的物品）
         weapon_id = None
-        for item_id in self.state.get_inventory(role):
+        for item_id in self.state.get_container_items(role):
             item = self.state.item_registry.get(item_id, {})
             if item.get("action") == "shoot":
                 weapon_id = item_id

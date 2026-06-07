@@ -563,7 +563,7 @@ class SeatAgent:
             f"地点：{location}",
             f"轮次：第{round_num}/{total_rounds}轮对话",
             f"剩余行动点：{action_points}",
-            f"本时间槽剩余调查次数：{investigations_remaining}/2",
+            f"本时间槽剩余调查次数：{investigations_remaining}次",
         ]
 
         # 背包信息（直接从 turn_token 消息中获取，无需再次查询）

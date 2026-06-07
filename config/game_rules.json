@@ -14,10 +14,23 @@
     "move_per_distance_unit": 1
   },
   "token_ring": {
-    "free_slot_rounds": 10,
+    "free_slot_rounds": 15,
     "meal_slot_rounds": 5,
-    "investigations_per_slot": 2,
+    "investigations_per_slot": 4,
     "wait_timeout": 30
+  },
+  "action_ranges": {
+    "speech": 0,
+    "shout": 1,
+    "shoot": 2,
+    "threaten": 2,
+    "investigate": 0,
+    "pickup": 0,
+    "gift": 0,
+    "comfort": 0,
+    "autopsy": 0,
+    "move": 0,
+    "default": 0
   },
   "info_points": {
     "P-": 1,

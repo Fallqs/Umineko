@@ -88,14 +88,33 @@ class GameState:
     # }
     item_registry: Dict[str, dict] = field(default_factory=dict)
 
-    # 角色背包：role_name → Set[item_id]
-    inventory: Dict[str, Set[str]] = field(default_factory=dict)
+    # 容器系统：container_id → Set[item_id]
+    # container_id 可以是角色名、尸体ID、容器物品ID
+    containers: Dict[str, Set[str]] = field(default_factory=dict)
+
+    # 容器开闭状态：container_id → "open" | "closed"
+    container_states: Dict[str, str] = field(default_factory=dict)
 
     # 物品实例状态：item_id → dict（如 {"ammo": 5}）
     # 每个 item_id 对应唯一的物品实例，状态在 add_item 时从 initial_state 初始化
     item_states: Dict[str, dict] = field(default_factory=dict)
 
-    # 已被取走的物品（全局唯一物品，取走后从场景中移除）
+    # 物品动态位置：item_id → 地点名 或 "container:容器ID" 或 "void"
+    # 由 core.py 初始化时从 item_registry 的 location 字段填入
+    item_locations: Dict[str, str] = field(default_factory=dict)
+
+    # 物品可见性：item_id → "hidden" | "visible"
+    # 初始化时从 item_registry 的 default_visibility 读取
+    item_visibility: Dict[str, str] = field(default_factory=dict)
+
+    # 藏匿系统
+    hiding_spots: Dict[str, str] = field(default_factory=dict)  # role -> spot_id
+    hiding_spot_occupants: Dict[str, Set[str]] = field(default_factory=dict)  # spot_id -> {roles}
+
+    # buff 定义注册表（由 core.py 从 buffs.json 注入，供 hook 系统使用）
+    buff_registry: Dict[str, dict] = field(default_factory=dict)
+
+    # 已被取走的物品（全局唯一物品，取走后从初始位置移除）
     taken_items: Set[str] = field(default_factory=set)
 
     # 角色可观测物：role_name → List[observable_desc]
@@ -253,6 +272,46 @@ class GameState:
         self.status_effects.pop(role, None)
         score = self.calculate_role_score(role)
         self.settled_role_scores[role] = score
+
+        # 生成尸体物品（带容器属性）
+        corpse_id = f"corpse:{role}"
+        corpse_location = self.locations.get(role, "未知")
+        self.item_registry[corpse_id] = {
+            "id": corpse_id,
+            "name": f"{role}的尸体",
+            "type": "corpse",
+            "description": f"{role}的尸体，安静地躺在地上。",
+            "player_desc": f"你看着{role}的尸体，心中涌起复杂的情绪。",
+            "gm_desc": f"{role}的尸体。死亡原因需要验尸确认。",
+            "default_visibility": "visible",
+            "is_container": True,
+            "volume": 0,
+            "capacity": None,
+            "default_state": "open",
+            "hooks": {
+                "on_add": {
+                    "steps": [
+                        {"op": "grant_buff", "buff_id": "carrying_corpse", "target": "{role}"}
+                    ]
+                },
+                "on_remove": {
+                    "steps": [
+                        {"op": "remove_buff", "buff_id": "carrying_corpse", "target": "{role}"}
+                    ]
+                }
+            }
+        }
+        self.item_locations[corpse_id] = f"map:{corpse_location}"
+        self.item_visibility[corpse_id] = "visible"
+        self.container_states[corpse_id] = "open"
+
+        # 将角色背包物品转移到尸体容器（跳过容积检查，确保不丢失）
+        role_items = list(self.containers.get(role, set()))
+        for item_id in role_items:
+            self.containers[role].discard(item_id)
+            self.containers.setdefault(corpse_id, set()).add(item_id)
+            self.item_locations[item_id] = f"container:{corpse_id}"
+
         return score
 
     # ------------------------------------------------------------------
@@ -271,12 +330,187 @@ class GameState:
     # 物品操作
     # ------------------------------------------------------------------
 
-    def add_item(self, role: str, item_id: str) -> bool:
-        """将物品加入角色背包。若物品为全局唯一，自动标记为已取走。
-        同时初始化物品实例状态（从 item_registry 的 initial_state 读取）。"""
-        if role not in self.inventory:
-            self.inventory[role] = set()
-        self.inventory[role].add(item_id)
+    def is_corpse(self, item_id: str) -> bool:
+        """判断物品是否为尸体。"""
+        return item_id.startswith("corpse:")
+    def is_container(self, container_id: str) -> bool:
+        """判断 container_id 是否是一个容器。
+        角色名（alive 或 dead）、尸体ID、或 is_container=True 的物品都是容器。"""
+        if container_id in self.alive_roles or container_id in self.dead_roles:
+            return True
+        if container_id.startswith("corpse:"):
+            return True
+        item = self.item_registry.get(container_id, {})
+        return item.get("is_container", False)
+
+    # ------------------------------------------------------------------
+    # 藏匿系统
+    # ------------------------------------------------------------------
+
+    def is_hidden(self, role: str) -> bool:
+        return role in self.hiding_spots
+
+    def hide_in(self, role: str, spot_id: str) -> bool:
+        """将角色藏入藏匿点。"""
+        item = self.item_registry.get(spot_id, {})
+        if not item.get("is_hiding_spot"):
+            return False
+        capacity = item.get("hiding_capacity", 1)
+        current = len(self.hiding_spot_occupants.get(spot_id, set()))
+        if current >= capacity:
+            return False
+        # 离开当前藏匿点（如果有）
+        self.leave_hiding_spot(role)
+        self.hiding_spots[role] = spot_id
+        self.hiding_spot_occupants.setdefault(spot_id, set()).add(role)
+        return True
+
+    def leave_hiding_spot(self, role: str) -> bool:
+        """角色离开藏匿点。"""
+        spot_id = self.hiding_spots.pop(role, None)
+        if spot_id:
+            occupants = self.hiding_spot_occupants.get(spot_id)
+            if occupants:
+                occupants.discard(role)
+                if not occupants:
+                    self.hiding_spot_occupants.pop(spot_id, None)
+            return True
+        return False
+
+    def get_visible_roles_at(self, location: str, observer: Optional[str] = None) -> List[str]:
+        """获取某地点对观察者可见的角色列表。
+
+        可见性规则：
+        - 非藏匿角色在地点中 → 对所有人可见
+        - 藏匿角色 → 仅对同藏匿点内的其他藏匿者可见
+        - 藏匿中的观察者可以看到同地点的非藏匿角色（偷听）
+        """
+        visible = []
+        observer_spot = self.hiding_spots.get(observer) if observer else None
+        for role in self.alive_roles:
+            role_loc = self.locations.get(role, "本馆")
+            if role_loc != location:
+                continue
+            spot = self.hiding_spots.get(role)
+            if not spot:
+                # 非藏匿者：对所有人可见
+                visible.append(role)
+            elif observer_spot and observer_spot == spot:
+                # 藏匿者：仅对同藏匿点内的观察者可见
+                visible.append(role)
+        return visible
+
+    def get_hiding_spots_at(self, location: str) -> List[str]:
+        """获取某地点的所有藏匿点ID。"""
+        spots = []
+        for item_id, item in self.item_registry.items():
+            if item.get("is_hiding_spot") and item.get("location") == location:
+                spots.append(item_id)
+        return spots
+
+    def get_container_used_volume(self, container_id: str) -> int:
+        """计算容器总占用 = 内部物品体积之和 + 容器自身体积。
+        V(x) = sum(V(i) for i in x) + v(x)"""
+        items = self.containers.get(container_id, set())
+        inner_sum = sum(
+            self.item_registry.get(iid, {}).get("volume", 1)
+            for iid in items
+        )
+        own_volume = self.item_registry.get(container_id, {}).get("volume", 1)
+        return inner_sum + own_volume
+
+    def can_fit(self, container_id: str, item_id: str) -> bool:
+        """检查物品是否能放入容器（容积约束）。"""
+        capacity = self.item_registry.get(container_id, {}).get("capacity")
+        if capacity is None:
+            return True  # 无限容量
+        used = self.get_container_used_volume(container_id)
+        item_volume = self.item_registry.get(item_id, {}).get("volume", 1)
+        return used + item_volume <= capacity
+
+    def open_container(self, container_id: str) -> bool:
+        """打开容器。"""
+        if not self.is_container(container_id):
+            return False
+        self.container_states[container_id] = "open"
+        return True
+
+    def close_container(self, container_id: str) -> bool:
+        """关闭容器。"""
+        if not self.is_container(container_id):
+            return False
+        self.container_states[container_id] = "closed"
+        return True
+
+    def get_effective_visibility(self, item_id: str, parent_container: str = None) -> str:
+        """递归计算物品的有效可见性。
+        closed 容器内所有物品 → hidden
+        open 容器内物品 → min(容器visibility, 物品visibility)
+        """
+        item_vis = self.item_visibility.get(item_id, "hidden")
+        
+        if parent_container:
+            # 容器 closed → 内部全部 hidden
+            if self.container_states.get(parent_container) == "closed":
+                return "hidden"
+            # 容器 open → 取容器和物品的最小可见性
+            container_vis = self.item_visibility.get(parent_container, "hidden")
+            if container_vis == "hidden":
+                return "hidden"
+            # 继续向上递归（检查父容器）
+            parent_loc = self.item_locations.get(parent_container, "")
+            if parent_loc.startswith("container:"):
+                grandparent = parent_loc[10:]
+                return self.get_effective_visibility(item_id, grandparent)
+        
+        return item_vis
+
+
+    def _run_item_hooks(self, item_id: str, hook_name: str, container_id: str) -> None:
+        """执行物品 hook。只处理纯状态变更（buff），不涉及网络 IO。
+        支持的操作：grant_buff, remove_buff。
+        """
+        item = self.item_registry.get(item_id, {})
+        hooks = item.get("hooks", {}).get(hook_name, {})
+        for step in hooks.get("steps", []):
+            op = step.get("op")
+            if op == "grant_buff":
+                buff_id = step.get("buff_id", "")
+                target = step.get("target", "{role}").replace("{role}", container_id)
+                buff_def = self.buff_registry.get(buff_id, {})
+                if buff_def:
+                    self.apply_buff(target, buff_id, buff_def)
+            elif op == "remove_buff":
+                buff_id = step.get("buff_id", "")
+                target = step.get("target", "{role}").replace("{role}", container_id)
+                self.remove_buff(target, buff_id)
+
+    def add_item(self, container_id: str, item_id: str) -> bool:
+        """将物品加入容器。更新动态位置为 container:容器ID。
+        检查容器是否 open、容积是否足够。
+        若物品为全局唯一，自动标记为已取走。
+        同时初始化物品实例状态（从 item_registry 的 initial_state 读取）。
+        触发 on_add hook。"""
+        if not self.is_container(container_id):
+            return False
+        
+        # 非角色容器必须 open 才能放入
+        if container_id not in (self.alive_roles | self.dead_roles):
+            if self.container_states.get(container_id) == "closed":
+                return False
+        
+        # 容积检查
+        if not self.can_fit(container_id, item_id):
+            return False
+        
+        self.containers.setdefault(container_id, set()).add(item_id)
+        self.item_locations[item_id] = f"container:{container_id}"
+        # 设置可见性：尸体强制 visible，其他物品默认 hidden
+        if self.is_corpse(item_id):
+            self.item_visibility[item_id] = "visible"
+        else:
+            item_def = self.item_registry.get(item_id, {})
+            self.item_visibility[item_id] = item_def.get("default_visibility", "hidden")
         item = self.item_registry.get(item_id, {})
         if item.get("type") == "permanent":
             self.taken_items.add(item_id)
@@ -284,23 +518,58 @@ class GameState:
         if item_id not in self.item_states:
             initial = item.get("initial_state", {})
             self.item_states[item_id] = dict(initial)
+        # 触发 on_add hook
+        self._run_item_hooks(item_id, "on_add", container_id)
         return True
 
-    def remove_item(self, role: str, item_id: str) -> bool:
-        """从角色背包移除物品。"""
-        inv = self.inventory.get(role)
+    def remove_item(self, container_id: str, item_id: str) -> bool:
+        """从角色背包移除物品。触发 on_remove hook。
+        不更新动态位置（由调用者决定物品去向）。"""
+        inv = self.containers.get(container_id)
         if inv and item_id in inv:
             inv.discard(item_id)
+            # 触发 on_remove hook
+            self._run_item_hooks(item_id, "on_remove", container_id)
             return True
         return False
 
-    def has_item(self, role: str, item_id: str) -> bool:
-        """检查角色是否持有指定物品。"""
-        return item_id in self.inventory.get(role, set())
+    def drop_item(self, container_id: str, item_id: str, location: str) -> bool:
+        """将物品从容器丢弃到指定地点。
+        内部调用 remove_item（触发 on_remove hook），再设置位置。"""
+        if not self.has_item(container_id, item_id):
+            return False
+        self.remove_item(container_id, item_id)
+        self.item_locations[item_id] = f"map:{location}"
+        return True
 
-    def get_inventory(self, role: str) -> Set[str]:
+    def has_item(self, container_id: str, item_id: str) -> bool:
+        """检查角色是否持有指定物品。"""
+        return item_id in self.containers.get(container_id, set())
+
+    def get_container_items(self, container_id: str) -> Set[str]:
         """获取角色背包中的物品 ID 集合。"""
-        return set(self.inventory.get(role, set()))
+        return set(self.containers.get(container_id, set()))
+
+    def get_item_location(self, item_id: str) -> str:
+        """获取物品的当前位置。
+        返回地点名、'container:容器ID'、或 'void'。"""
+        if item_id in self.item_locations:
+            return self.item_locations[item_id]
+        # 回退到注册表中的初始位置
+        item = self.item_registry.get(item_id, {})
+        return item.get("location", "void")
+
+    def set_item_visibility(self, item_id: str, visibility: str) -> bool:
+        """设置物品可见性。尸体在背包中时不可修改（始终 visible）。
+        返回是否成功修改。"""
+        if item_id not in self.item_locations:
+            return False
+        loc = self.item_locations[item_id]
+        if self.is_corpse(item_id) and loc.startswith("container:"):
+            # 尸体在背包中时强制 visible，不可修改
+            return False
+        self.item_visibility[item_id] = visibility
+        return True
 
     def build_available_actions(self, role: str, investigations_remaining: int = 2, nearby_players: Optional[List[str]] = None) -> List[str]:
         """动态构建角色当前可用的行动列表。
@@ -312,14 +581,22 @@ class GameState:
         lines.append("1. 发言（每轮都可以，同地点所有人能听到，消耗0行动点）")
         if investigations_remaining > 0:
             cost = self.get_action_point_cost(role, 2)
-            lines.append(f"2. 调查当前地点或指定对象（消耗{cost}点，本时间槽剩余 {investigations_remaining} 次机会）")
+            lines.append(f"2. 调查/移动/互动（消耗{cost}点行动点，占用1次调查机会，本时间槽剩余 {investigations_remaining} 次机会）")
+            lines.append("   包括：调查地点或人物、移动到相邻地点、拾取物品、搜身、安慰、开枪等")
         else:
-            lines.append("2. 调查当前地点或指定对象（本时间槽调查次数已用尽）")
-        lines.append("3. 移动（消耗1-3行动点，取决于距离）")
-        lines.append("4. 跳过回合")
+            lines.append("2. 调查/移动/互动（本时间槽次数已用尽，本轮无法执行）")
+        lines.append("3. 跳过回合")
+        lines.append("4. 丢弃物品（将背包中的物品丢在当前地点，消耗0行动点）")
+
+        # 藏匿点信息
+        role_loc = self.locations.get(role, "本馆")
+        spots = self.get_hiding_spots_at(role_loc)
+        if spots:
+            spot_names = [self.item_registry.get(sid, {}).get("name", sid) for sid in spots]
+            lines.append(f"5. 藏匿：你注意到这里有可以躲藏的地方：{', '.join(spot_names)}")
 
         # 物品授予的行动（使用、赠送、射击等全部在这里）
-        inventory = self.get_inventory(role)
+        inventory = self.get_container_items(role)
         special_actions: List[str] = []
         for item_id in inventory:
             item = self.item_registry.get(item_id, {})
@@ -367,26 +644,53 @@ class GameState:
             return item.get("gm_desc", "一件不明物品")
         return item.get("player_desc", item.get("gm_desc", "一件不明物品"))
 
-    def transfer_item(self, from_role: str, to_role: str, item_id: str) -> bool:
-        """将物品从 from_role 转移给 to_role。"""
-        if not self.has_item(from_role, item_id):
+    def transfer_item(self, from_container: str, to_container: str, item_id: str) -> bool:
+        """将物品从 from_container 转移给 to_container。
+        触发 on_remove（from 方）→ on_add（to 方）。
+        自动检查目标容器容积。"""
+        if not self.has_item(from_container, item_id):
             return False
-        self.remove_item(from_role, item_id)
-        self.add_item(to_role, item_id)
-        return True
+        self.remove_item(from_container, item_id)
+        return self.add_item(to_container, item_id)
 
-    def get_location_items(self, location: str, day: int) -> List[str]:
-        """获取指定地点和日期下可用的物品 ID 列表（排除已被取走的）。"""
+    def get_location_items(self, location: str, day: int, visibility_filter: Optional[str] = None, max_depth: int = 5) -> List[str]:
+        """获取指定地点和日期下可用的物品 ID 列表。
+        递归展开 open 容器内的物品。
+        visibility_filter: None 返回所有，"visible" 只返回可见，"hidden" 只返回隐藏。
+        max_depth: 递归深度限制，防止无限套娃。"""
+        if max_depth <= 0:
+            return []
         result = []
-        for item_id, item in self.item_registry.items():
-            if item.get("location") != location:
+        for item_id, loc in self.item_locations.items():
+            if loc != f"map:{location}":
                 continue
+            if loc == "void":
+                continue
+            item = self.item_registry.get(item_id, {})
             if item.get("day_available", 1) > day:
                 continue
-            if item_id in self.taken_items:
-                continue
+            if visibility_filter is not None:
+                vis = self.get_effective_visibility(item_id)
+                if vis != visibility_filter:
+                    continue
             result.append(item_id)
+            # 递归展开 open 容器内的物品
+            if self.is_container(item_id) and self.container_states.get(item_id) == "open":
+                inner_items = self.containers.get(item_id, set())
+                for inner_id in inner_items:
+                    inner_item = self.item_registry.get(inner_id, {})
+                    if inner_item.get("day_available", 1) > day:
+                        continue
+                    if visibility_filter is not None:
+                        inner_vis = self.get_effective_visibility(inner_id, item_id)
+                        if inner_vis != visibility_filter:
+                            continue
+                    result.append(inner_id)
         return result
+
+    def get_visible_location_items(self, location: str, day: int) -> List[str]:
+        """获取指定地点和日期下可见的物品 ID 列表。"""
+        return self.get_location_items(location, day, visibility_filter="visible")
 
     def get_item_state(self, item_id: str, key: str, default=None):
         """获取指定物品实例的状态字段。"""

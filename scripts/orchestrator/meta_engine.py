@@ -34,9 +34,10 @@ MetaActionHandler = Callable[[dict, ActionContext, GameState, NetworkLayer], Act
 class MetaActionEngine:
     """执行由元行动步骤序列定义的行为。"""
 
-    def __init__(self, state: GameState, network: NetworkLayer):
+    def __init__(self, state: GameState, network: NetworkLayer, config=None):
         self.state = state
         self.network = network
+        self.config = config
         self._registry: Dict[str, MetaActionHandler] = {}
         self._register_builtins()
 
@@ -60,6 +61,7 @@ class MetaActionEngine:
         self.register("restore_ap", _restore_ap)
         self.register("check_dead_in_location", _check_dead_in_location)
         self.register("pickup_item", _pickup_item)
+        self.register("drop_item", _drop_item)
 
     def register(self, op: str, handler: MetaActionHandler):
         """注册自定义元行动。"""
@@ -167,12 +169,23 @@ def _consume_item_state(step: dict, ctx: ActionContext, state: GameState, net: N
 def _broadcast(step: dict, ctx: ActionContext, state: GameState, net: NetworkLayer) -> ActionResult:
     message = ctx.interpolate(step.get("message", ""))
     exclude_self = step.get("exclude_self", True)
+    range_limit = step.get("range", 0)
     import asyncio
+    actor_loc = state.locations.get(ctx.role) if ctx.role else None
     for seat_id, seat in net.seats.items():
         if not seat.alive:
             continue
         if exclude_self and ctx.seat and seat_id == ctx.seat.seat_id:
             continue
+        # 距离过滤（若配置了 config）
+        if range_limit > 0 and ctx.role and seat.role_name:
+            target_loc = state.locations.get(seat.role_name)
+            if actor_loc != target_loc:
+                if hasattr(net, '_meta_config') and net._meta_config:
+                    dist = net._meta_config.get_distance(actor_loc, target_loc)
+                    if dist > range_limit:
+                        continue
+                # 无 config 时保守处理：不同地点且 range>0 时默认放行（同地点已上面处理）
         asyncio.create_task(net.send_and_drain(seat, {
             "type": "notification",
             "title": "事件",
@@ -308,4 +321,18 @@ def _pickup_item(step: dict, ctx: ActionContext, state: GameState, net: NetworkL
     item = state.item_registry.get(item_id, {})
     ctx.setvar("item_name", item.get("name", "不明物品"))
     ctx.setvar("item_desc", state.get_item_desc(item_id, gm_view=False))
+    return ActionResult.ok()
+
+
+def _drop_item(step: dict, ctx: ActionContext, state: GameState, net: NetworkLayer) -> ActionResult:
+    """丢弃物品到当前地点。"""
+    item_id = step.get("item_id") or ctx.item_id
+    location = step.get("location") or ctx.location
+    if not item_id:
+        return ActionResult.fail("没有指定要丢弃的物品")
+    if not state.has_item(ctx.role, item_id):
+        return ActionResult.fail("你没有这件物品")
+    state.drop_item(ctx.role, item_id, location)
+    item = state.item_registry.get(item_id, {})
+    ctx.setvar("dropped_item_name", item.get("name", "不明物品"))
     return ActionResult.ok()

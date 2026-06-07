@@ -60,6 +60,17 @@
       "effects": [
         {"op": "modify_ap_cost", "multiplier": 0.8}
       ]
+    },
+    "carrying_corpse": {
+      "name": "搬运尸体",
+      "type": "debuff",
+      "description": "你背负着一具尸体，行动变得异常艰难",
+      "duration": {
+        "type": "permanent"
+      },
+      "effects": [
+        {"op": "modify_ap_cost", "multiplier": 2.0}
+      ]
     }
   }
 }

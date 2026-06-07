@@ -70,6 +70,17 @@ class Orchestrator:
         self.state = GameState()
         # 注入物品注册表（若配置存在则加载，否则为空）
         self.state.item_registry = dict(self.config.items)
+        # 初始化物品动态位置（从注册表的静态 location 填入）
+        for item_id, item in self.state.item_registry.items():
+            loc = item.get("location", "void")
+            self.state.item_locations[item_id] = f"map:{loc}" if loc != "void" else "void"
+            self.state.item_visibility[item_id] = item.get("default_visibility", "hidden")
+            # 初始化容器状态
+            if item.get("is_container"):
+                default_state = item.get("default_state", "closed")
+                self.state.container_states[item_id] = default_state
+        # 注入 buff 定义注册表（供 hook 系统使用）
+        self.state.buff_registry = dict(self.config.buffs)
         self.network = NetworkLayer()
         self.server = GameServer(host, port, self.network, msg_handler=self)
         self.pm = ProcessManager(self.root_dir, self._normalize_python_path(python_exe), self.network)
@@ -79,7 +90,7 @@ class Orchestrator:
         self.location_engine = LocationEngine(self.state, self.config)
         self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self, config=self.config)
         self.action_engine = ActionEngine(self.state, self.config, self.network)
-        self.meta_engine = MetaActionEngine(self.state, self.network)
+        self.meta_engine = MetaActionEngine(self.state, self.network, self.config)
         self.npc_engine = NPCEngine(self.state, self.pm, config=self.config)
         self.death_engine = DeathEngine(self.state, self.pm, self.network, config=self.config, log_callback=self._log_event)
         self.beatrice_engine = BeatriceEngine(self.state, self.network)
@@ -231,8 +242,6 @@ class Orchestrator:
                 self.state.night_owl.add(role)
             else:
                 self.state.night_owl.discard(role)
-            if "pending_moves" in inherited and inherited["pending_moves"]:
-                self.state.pending_moves[role] = inherited["pending_moves"]
             print(f"[Orchestrator] {seat.seat_id}({role}) 继承了状态: {inherited}")
 
         # 检查是否满足最小seat数，触发游戏开始
@@ -287,15 +296,16 @@ class Orchestrator:
         self.state.reset_action_points(daily_ap)
         self.state.sleeping.clear()
         self.state.night_owl.clear()
-        for role in self.state.alive_roles:
-            self.state.locations[role] = "本馆"
+        # 先检查死亡（尸体生成需要死亡前位置），再移动存活角色
         deaths = self.death_engine.check_scheduled_deaths(self.state.day, self.state.phase)
         if deaths:
             for role, cause in deaths:
-                self._log_event("DEATH", f"{role}: {cause}")
+                await self.death_engine.handle_death(role, cause)
             death_text = "\n".join([f"☠️ {r}: {c}" for r, c in deaths])
             await self._broadcast_notification("清晨事件", f"发现了新的死亡：\n{death_text}", severity="error")
-        else:
+        for role in list(self.state.alive_roles):
+            self.state.locations[role] = "本馆"
+        if not deaths:
             await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
         self._log_event("SYSTEM", f"行动点重置为26，存活: {sorted(self.state.alive_roles)}")
         print(f"[Orchestrator] DAWN 完成，行动点已重置为26")
@@ -306,20 +316,8 @@ class Orchestrator:
             print(f"[Orchestrator] {slot}: 无活跃角色，跳过")
             self._log_event("SYSTEM", f"{slot}: 无活跃角色，跳过")
             return
-        groups = self.location_engine.group_by_location(active_roles)
-        locations = list(groups.keys())
-        random.shuffle(locations)
-        print(f"[Orchestrator] {slot}: 活跃地点 {locations}")
-        self._log_event("SYSTEM", f"{slot} 开始，活跃地点: {locations}")
-        # 每个时间槽开始时重置调查次数
         self.state.reset_investigations()
-        for loc in locations:
-            await self.token_ring.run(loc, groups[loc], slot)
-        moves = self.location_engine.resolve_pending_moves()
-        for role, frm, to, success in moves:
-            status = "成功" if success else "失败"
-            print(f"[Orchestrator] 🚶 {role}: {frm} -> {to} ({status})")
-            self._log_event("MOVE", f"{role}: {frm} -> {to} ({status})")
+        await self.token_ring.run(active_roles, slot)
 
     async def on_meal_slot(self, slot: str) -> None:
         meal_name = {"BREAKFAST": "早饭", "LUNCH": "午饭", "DINNER": "晚饭"}.get(slot, slot)
@@ -329,10 +327,9 @@ class Orchestrator:
             if role not in self.state.sleeping:
                 self.state.locations[role] = "餐厅"
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
-        # 每个时间槽开始时重置调查次数
         self.state.reset_investigations()
         if active_roles:
-            await self.token_ring.run("餐厅", active_roles, slot)
+            await self.token_ring.run(active_roles, slot)
         await self._broadcast_notification(f"{meal_name}结束", f"{meal_name}结束了。", severity="info")
 
     async def on_sleep_check(self) -> None:
@@ -375,7 +372,7 @@ class Orchestrator:
     def _find_granted_action(self, role: str, action_id: str) -> Optional[dict]:
         """查找角色可用的 granted action（先查物品，再查角色专属，最后查通用行动）。"""
         # 1. 搜索物品授予的行动
-        for item_id in self.state.get_inventory(role):
+        for item_id in self.state.get_container_items(role):
             item = self.state.item_registry.get(item_id, {})
             for action_def in item.get("granted_actions", []):
                 if action_def.get("id") == action_id:
@@ -419,6 +416,8 @@ class Orchestrator:
             item_state = self.state.item_states.get(item_id, {})
             for k, v in item_state.items():
                 ctx.setvar(f"item_state.{k}", v)
+        # 记录执行前的 buff 状态（用于即时通知）
+        before_buffs = set(self.state.get_buffs(role).keys())
         result = await self.meta_engine.execute_steps(
             action_def.get("steps", []),
             ctx,
@@ -428,24 +427,43 @@ class Orchestrator:
         log_msg = ctx.getvar("_log_event_message")
         if log_msg:
             self._log_event(ctx.getvar("_log_event_type", "ACTION"), log_msg)
+        # Buff 变更即时通知
+        after_buffs = set(self.state.get_buffs(role).keys())
+        for buff_id in after_buffs - before_buffs:
+            buff = self.state.get_buffs(role)[buff_id]
+            await self.network.send_and_drain(seat, {
+                "type": "notification",
+                "title": "状态变化",
+                "body": f"你获得了【{buff.get('name', buff_id)}】",
+                "severity": "warning" if buff.get("type") == "debuff" else "info"
+            })
+        for buff_id in before_buffs - after_buffs:
+            buff_name = self.state.buff_registry.get(buff_id, {}).get("name", buff_id)
+            await self.network.send_and_drain(seat, {
+                "type": "notification",
+                "title": "状态解除",
+                "body": f"【{buff_name}】已解除",
+                "severity": "info"
+            })
         return result.success
 
     # ------------------------------------------------------------------
     # TokenCallbacks 实现
     # ------------------------------------------------------------------
 
-    async def on_action_received(self, role: str, action_msg: dict, location: str, slot: str) -> None:
+    async def on_action_received(self, role: str, action_msg: dict, slot: str) -> None:
         seat_id = self.state.role_controller.get(role)
         seat = self.network.seats.get(seat_id) if seat_id else None
         if not seat:
             return
 
         action_text = action_msg.get("action_text", "")
+        location = self.state.locations.get(role, "本馆")
         print(f"[Orchestrator] 📨 action from {seat_id}({role}): {action_text[:80]}...")
 
         # 计算同场角色，用于 parse 阶段识别目标
         nearby = [r for r in self.state.alive_roles
-                  if self.state.locations.get(r) == location and r != role]
+                  if self.state.locations.get(r) == location and r != role and not self.state.is_hidden(r)]
 
         parsed = self.action_engine.parse(action_text, nearby_roles=nearby)
 
@@ -517,7 +535,7 @@ class Orchestrator:
                         "type": "notification", "title": "射击", "body": shoot_result, "severity": "error"
                     })
                     await self.action_engine.broadcast_action_visibility(
-                        role, "突然掏出了枪！", location, exclude_role=role
+                        role, "突然掏出了枪！", range_limit=self.config.get_action_range("shoot"), exclude_role=role
                     )
                     self._log_event("ACTION", f"{role} 向 {parsed.shoot_target} 开枪")
             else:
@@ -542,7 +560,7 @@ class Orchestrator:
                         "type": "notification", "title": "威胁", "body": threaten_result, "severity": "warning"
                     })
                     await self.action_engine.broadcast_action_visibility(
-                        role, f"用武器威胁着{parsed.threaten_target}！", location, exclude_role=role
+                        role, f"用武器威胁着{parsed.threaten_target}！", range_limit=self.config.get_action_range("threaten"), exclude_role=role
                     )
                     self._log_event("ACTION", f"{role} 威胁 {parsed.threaten_target}")
             else:
@@ -606,13 +624,50 @@ class Orchestrator:
                 })
             special_executed = True
 
+        # 丢弃物品
+        if not special_executed and parsed.drop:
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("drop") if hasattr(self.config, "get_ap_cost") else 0)
+            if self.state.consume_action_point(role, cost):
+                matched_item = None
+                if parsed.drop_item:
+                    for item_id in self.state.get_container_items(role):
+                        item = self.state.item_registry.get(item_id, {})
+                        if parsed.drop_item == item_id or parsed.drop_item in item.get("name", ""):
+                            matched_item = item_id
+                            break
+                else:
+                    # 未指定物品，默认丢弃背包中第一个
+                    inventory = list(self.state.get_container_items(role))
+                    if inventory:
+                        matched_item = inventory[0]
+                if not matched_item:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "丢弃失败",
+                        "body": "你没有可以丢弃的物品。", "severity": "warning"
+                    })
+                else:
+                    item = self.state.item_registry.get(matched_item, {})
+                    item_name = item.get("name", matched_item)
+                    self.state.drop_item(role, matched_item, location)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "丢弃",
+                        "body": f"你把 {item_name} 丢在了 {location}。", "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 在{location}丢弃了 {item_name}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法丢弃。", "severity": "warning"
+                })
+            special_executed = True
+
         # 赠送物品——必须指定具体物品；所有物品默认可赠送，配置了 gift action 的走元行动
         if not special_executed and parsed.gift_target and parsed.gift_item:
             cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("gift") if hasattr(self.config, "get_ap_cost") else 1)
             if self.state.consume_action_point(role, cost):
                 # 1. 在背包中模糊匹配物品
                 matched_item = None
-                for item_id in self.state.get_inventory(role):
+                for item_id in self.state.get_container_items(role):
                     item = self.state.item_registry.get(item_id, {})
                     if parsed.gift_item == item_id or parsed.gift_item in item.get("name", ""):
                         matched_item = item_id
@@ -661,7 +716,7 @@ class Orchestrator:
                         "type": "notification", "title": "安慰", "body": comfort_result, "severity": "info"
                     })
                     await self.action_engine.broadcast_action_visibility(
-                        role, f"正在安慰{parsed.comfort_target}", location, exclude_role=role
+                        role, f"正在安慰{parsed.comfort_target}", range_limit=self.config.get_action_range("comfort"), exclude_role=role
                     )
                     self._log_event("ACTION", f"{role} 安慰 {parsed.comfort_target}: {comfort_result[:100]}")
             else:
@@ -671,16 +726,163 @@ class Orchestrator:
                 })
             special_executed = True
 
+        # 切换持有物品可见性（免费，非尸体）
+        if not special_executed and parsed.toggle_visibility_item and parsed.toggle_visibility_target:
+            matched_item = None
+            for item_id in self.state.get_container_items(role):
+                item = self.state.item_registry.get(item_id, {})
+                if parsed.toggle_visibility_item == item_id or parsed.toggle_visibility_item in item.get("name", ""):
+                    matched_item = item_id
+                    break
+            if matched_item:
+                if self.state.is_corpse(matched_item):
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "无法切换",
+                        "body": "尸体的可见性不可修改。", "severity": "warning"
+                    })
+                else:
+                    self.state.set_item_visibility(matched_item, parsed.toggle_visibility_target)
+                    item_name = self.state.item_registry.get(matched_item, {}).get("name", matched_item)
+                    vis_desc = "可见" if parsed.toggle_visibility_target == "visible" else "隐藏"
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "物品状态",
+                        "body": f"你将 {item_name} 设为{vis_desc}。", "severity": "info"
+                    })
+            special_executed = True
+
+        # 打开容器
+        if not special_executed and parsed.open_container:
+            matched_item = None
+            for item_id in self.state.get_container_items(role):
+                item = self.state.item_registry.get(item_id, {})
+                if parsed.open_container == item_id or parsed.open_container in item.get("name", ""):
+                    matched_item = item_id
+                    break
+            if matched_item and self.state.is_container(matched_item):
+                if self.state.container_states.get(matched_item) == "open":
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "容器状态",
+                        "body": f"{self.state.item_registry.get(matched_item, {}).get('name', matched_item)} 已经是打开状态。", "severity": "info"
+                    })
+                else:
+                    self.state.open_container(matched_item)
+                    item_name = self.state.item_registry.get(matched_item, {}).get("name", matched_item)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "打开容器",
+                        "body": f"你打开了 {item_name}。", "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 打开了 {item_name}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "无法打开",
+                    "body": "该物品不是容器或不在你的背包中。", "severity": "warning"
+                })
+            special_executed = True
+
+        # 关闭容器
+        if not special_executed and parsed.close_container:
+            matched_item = None
+            for item_id in self.state.get_container_items(role):
+                item = self.state.item_registry.get(item_id, {})
+                if parsed.close_container == item_id or parsed.close_container in item.get("name", ""):
+                    matched_item = item_id
+                    break
+            if matched_item and self.state.is_container(matched_item):
+                if self.state.container_states.get(matched_item) == "closed":
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "容器状态",
+                        "body": f"{self.state.item_registry.get(matched_item, {}).get('name', matched_item)} 已经是关闭状态。", "severity": "info"
+                    })
+                else:
+                    self.state.close_container(matched_item)
+                    item_name = self.state.item_registry.get(matched_item, {}).get("name", matched_item)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "关闭容器",
+                        "body": f"你关闭了 {item_name}。", "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 关闭了 {item_name}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "无法关闭",
+                    "body": "该物品不是容器或不在你的背包中。", "severity": "warning"
+                })
+            special_executed = True
+
         # 发言（始终可叠加）
         if parsed.speech:
-            await self.action_engine.broadcast_speech(role, parsed.speech, location)
+            await self.action_engine.broadcast_speech(role, parsed.speech, range_limit=0)
             self._log_event("SPEECH", f'{role} (@{location}): "{parsed.speech}"')
 
-        # 移动意向（始终可叠加）
-        next_move = parsed.next_move or action_msg.get("next_move")
-        if next_move:
-            self.action_engine.handle_move_intent(role, next_move)
-            self._log_event("MOVE_INTENT", f"{role} 计划移动到: {next_move}")
+        # 大喊（始终可叠加，range=1）
+        if parsed.shout_text:
+            await self.action_engine.broadcast_speech(role, parsed.shout_text, range_limit=1)
+            self._log_event("SPEECH", f'{role} (@{location} 大喊): "{parsed.shout_text}"')
+
+        # 即时移动
+        if parsed.move_target:
+            target_loc = parsed.move_target
+            if target_loc in self.config.locations:
+                dist = self.config.get_distance(location, target_loc)
+                move_cost = self.state.get_action_point_cost(role, dist)
+                if self.state.consume_action_point(role, move_cost) and self.state.use_investigation(role):
+                    self.state.locations[role] = target_loc
+                    await self.action_engine.broadcast_action_visibility(
+                        role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
+                    )
+                    self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
+                else:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "移动失败",
+                        "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
+                    })
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "移动失败",
+                    "body": f"未知地点: {target_loc}", "severity": "warning"
+                })
+
+        # 藏匿
+        if parsed.hide_in:
+            spot_name = parsed.hide_in
+            matched_spot = None
+            for item_id, item in self.state.item_registry.items():
+                if item.get("is_hiding_spot") and item.get("location") == location:
+                    if spot_name == item_id or spot_name in item.get("name", ""):
+                        matched_spot = item_id
+                        break
+            if matched_spot:
+                if self.state.hide_in(role, matched_spot):
+                    spot_display = self.state.item_registry.get(matched_spot, {}).get("name", matched_spot)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "藏匿",
+                        "body": f"你躲进了{spot_display}。", "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 躲进了 {spot_display}")
+                else:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "藏匿失败",
+                        "body": "藏匿点已满或无法躲藏。", "severity": "warning"
+                    })
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "藏匿失败",
+                    "body": f"{location} 没有名为 {spot_name} 的藏匿点。", "severity": "warning"
+                })
+
+        # 离开藏匿点
+        if parsed.leave_hideout:
+            if self.state.is_hidden(role):
+                self.state.leave_hiding_spot(role)
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "离开藏匿",
+                    "body": "你离开了藏身处。", "severity": "info"
+                })
+                self._log_event("ACTION", f"{role} 离开了藏身处")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "无法执行",
+                    "body": "你没有躲在任何地方。", "severity": "warning"
+                })
 
         # 决斗（最高优先级，但为剧情关键始终执行）
         if parsed.duel_beatrice and role in ("嘉音", "纱音"):

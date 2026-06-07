@@ -1,7 +1,7 @@
 """
 《海猫鸣泣之时：六轩岛黄昏》令牌环引擎
 
-实现"同一地点内串行行动"的核心机制。
+实现"全局行动序列"的核心机制。
 """
 
 import asyncio
@@ -14,7 +14,7 @@ from .state import GameState
 
 
 class TokenCallbacks(Protocol):
-    async def on_action_received(self, role: str, action_msg: dict, location: str, slot: str) -> None: ...
+    async def on_action_received(self, role: str, action_msg: dict, slot: str) -> None: ...
 
 
 class TokenRingEngine:
@@ -31,7 +31,7 @@ class TokenRingEngine:
             return self.config.get_token_ring_rule(key, default)
         return default
 
-    async def run(self, location: str, players: List[str], slot: str, rounds: Optional[int] = None) -> None:
+    async def run(self, players: List[str], slot: str, rounds: Optional[int] = None) -> None:
         if not players:
             return
         players = list(players)
@@ -44,7 +44,7 @@ class TokenRingEngine:
                 rounds = self._get_rule("free_slot_rounds", 10)
         max_inv = self._get_rule("investigations_per_slot", 2)
         wait_timeout = self._get_rule("wait_timeout", 30.0)
-        print(f"[TokenRing] 📍 {location} 令牌环开始，玩家: {players}，轮数: {rounds}")
+        print(f"[TokenRing] 🌐 全局令牌环开始，玩家: {players}，轮数: {rounds}")
 
         for round_num in range(1, rounds + 1):
             for role in players:
@@ -57,16 +57,29 @@ class TokenRingEngine:
                 if not seat or not seat.alive:
                     continue
 
-                nearby = [r for r in players if r != role]
+                location = self.state.locations.get(role, "本馆")
+                nearby = [r for r in players
+                          if r != role
+                          and self.state.locations.get(r) == location
+                          and not self.state.is_hidden(r)]
                 ap = self.state.action_points.get(role, 0)
                 cost_multiplier = 2 if role in self.state.night_owl else 1
                 investigations_remaining = max(0, max_inv - self.state.get_investigations_used(role))
 
-                context = self._build_context(role, location, slot, round_num, rounds, nearby, ap, cost_multiplier, investigations_remaining)
+                context = self._build_context(role, slot, round_num, rounds, nearby, ap, cost_multiplier, investigations_remaining)
                 msg_id = f"turn_d{self.state.day}_{slot}_{seat_id}_r{round_num}"
                 # 携带背包信息（供 agent_wrapper 直接展示）
-                inventory_ids = self.state.get_inventory(role)
-                inventory_names = [self.state.item_registry.get(iid, {}).get("name", iid) for iid in inventory_ids]
+                inventory_ids = self.state.get_container_items(role)
+                inventory_names = []
+                for iid in inventory_ids:
+                    item = self.state.item_registry.get(iid, {})
+                    name = item.get("name", iid)
+                    if self.state.is_container(iid):
+                        state = self.state.container_states.get(iid, "closed")
+                        state_desc = "打开" if state == "open" else "关闭"
+                        inventory_names.append(f"{name}（{state_desc}）")
+                    else:
+                        inventory_names.append(name)
                 msg = {
                     "type": "turn_token",
                     "seat_id": seat_id,
@@ -91,15 +104,16 @@ class TokenRingEngine:
 
                 action_msg = await self._wait_for_action(seat, msg_id, timeout=wait_timeout)
                 if action_msg:
-                    await self.cb.on_action_received(role, action_msg, location, slot)
+                    await self.cb.on_action_received(role, action_msg, slot)
                 else:
                     print(f"[TokenRing] ⏱️ {seat_id}({role}) 未响应，跳过")
 
-        print(f"[TokenRing] 📍 {location} 令牌环结束")
+        print(f"[TokenRing] 🌐 全局令牌环结束")
         # 推进按回合数计算的 buff 持续时间
         self.state.tick_buff_durations("token_ring_end")
 
-    def _build_context(self, role, location, slot, round_num, total_rounds, nearby, ap, cost_multiplier, investigations_remaining: int = 2) -> str:
+    def _build_context(self, role, slot, round_num, total_rounds, nearby, ap, cost_multiplier, investigations_remaining: int = 2) -> str:
+        location = self.state.locations.get(role, "本馆")
         parts = [
             f"【第{self.state.day}天 - {slot}】",
             f"你在{location}。",
@@ -112,12 +126,44 @@ class TokenRingEngine:
             parts.append("【熬夜惩罚】你的所有行动消耗变为2倍！")
 
         # 背包信息
-        inventory = self.state.get_inventory(role)
+        inventory = self.state.get_container_items(role)
         if inventory:
-            item_names = [self.state.item_registry.get(iid, {}).get("name", iid) for iid in inventory]
-            parts.append(f"你携带的物品：{', '.join(item_names)}")
+            item_descs = []
+            for iid in inventory:
+                item = self.state.item_registry.get(iid, {})
+                name = item.get("name", iid)
+                if self.state.is_container(iid):
+                    state = self.state.container_states.get(iid, "closed")
+                    state_desc = "打开" if state == "open" else "关闭"
+                    item_descs.append(f"{name}（{state_desc}）")
+                else:
+                    item_descs.append(name)
+            parts.append(f"你携带的物品：{', '.join(item_descs)}")
         else:
             parts.append("你的背包是空的。")
+
+        # 地点可见物品
+        visible_item_descs = []
+        for item_id, loc in self.state.item_locations.items():
+            if loc != f"map:{location}":
+                continue
+            if self.state.get_effective_visibility(item_id) != "visible":
+                continue
+            item = self.state.item_registry.get(item_id, {})
+            name = item.get("name", item_id)
+            if self.state.is_container(item_id) and self.state.container_states.get(item_id) == "open":
+                inner = self.state.get_container_items(item_id)
+                inner_names = [self.state.item_registry.get(iid, {}).get("name", iid) for iid in inner]
+                if inner_names:
+                    visible_item_descs.append(f"{name}（内有：{', '.join(inner_names)}）")
+                else:
+                    visible_item_descs.append(name)
+            else:
+                visible_item_descs.append(name)
+        if visible_item_descs:
+            parts.append(f"你注意到这里有：{', '.join(visible_item_descs)}")
+        else:
+            parts.append("这里没有引人注目的物品。")
 
         # 动态构建可用行动列表
         parts.append("")
@@ -148,7 +194,7 @@ class TokenRingEngine:
 
         parts.append("")
         parts.append("请用自然语言描述你的行动和发言。")
-        parts.append('如果你希望下个时间点移动到其他地点，请在描述末尾声明："下轮移动：{地点名}"')
+        parts.append('如果你希望移动到其他地点，请在描述中声明："移动到：{地点名}"')
         return "\n".join(parts)
 
     async def _wait_for_action(self, seat: SeatConnection, parent_id: str, timeout: float = 180.0) -> Optional[dict]:

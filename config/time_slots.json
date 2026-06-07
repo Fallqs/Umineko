@@ -1,21 +1,21 @@
 {
   "time_slots": [
     "DAWN",
-    "MORNING_1",
+    "MORNING",
     "BREAKFAST",
-    "NOON_1", "NOON_2",
+    "NOON",
     "LUNCH",
-    "AFTERNOON_1", "AFTERNOON_2",
+    "AFTERNOON",
     "DINNER",
     "SLEEP_CHECK",
-    "EVENING_1", "EVENING_2",
+    "EVENING",
     "MIDNIGHT"
   ],
   "free_slots": [
-    "MORNING_1",
-    "NOON_1", "NOON_2",
-    "AFTERNOON_1", "AFTERNOON_2",
-    "EVENING_1", "EVENING_2"
+    "MORNING",
+    "NOON",
+    "AFTERNOON",
+    "EVENING"
   ],
   "meal_slots": [
     "BREAKFAST", "LUNCH", "DINNER"
