@@ -830,10 +830,18 @@ class SeatAgent:
         # human / npc 模式：直接用 GM Session 生成行动（简化处理，不做审查预解析）
         if self.mode in ("human", "npc") and self.gm:
             try:
-                if self.mode == "npc":
+                                if self.mode == "npc":
                     preset = build_npc_prompt(self.role_dir)
+                    npc_situation = f"{situation}
+
+记住你是谁。记住你在乎谁。保护你所爱的，躲避你所惧的，保守你的秘密，尽力活下去！"
+                    prompt = npc_situation + "
+
+" + prompt
                     if preset:
-                        prompt = prompt + f"\n\n{preset}"
+                        prompt = prompt + f"
+
+{preset}"
                 out_text, _, _ = await self.gm.run_once(prompt)
                 player_input = _extract_player_input(out_text)
                 if player_input:

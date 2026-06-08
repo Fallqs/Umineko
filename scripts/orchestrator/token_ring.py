@@ -35,6 +35,26 @@ class TokenRingEngine:
             return self.config.get_token_ring_rule(key, default)
         return default
 
+    def _build_situation(self, role: str, slot: str) -> str:
+        """根据游戏状态动态生成角色处境描述。"""
+        day = self.state.day
+        has_deaths = bool(self.state.dead_roles)
+        is_beatrice = role == "贝阿朵莉切"
+
+        if is_beatrice:
+            if has_deaths:
+                return "棋盘上的棋子开始倒下了。他们开始害怕，但还不够——人类的挣扎才刚刚开始有趣。让他们再走近一点真相吧。"
+            else:
+                return "棋盘已经铺好，棋子们还不知道游戏的规则。让他们享受最后的安宁吧。"
+
+        if day == 1 and not has_deaths:
+            return "你踏上六轩岛，参加家族聚会。天空阴云密布，海风带着咸涩的潮湿。一切看起来只是寻常的不和，但你的直觉告诉你——有什么东西正在暗处注视。"
+
+        if has_deaths:
+            return "杀戮的漩涡正悄然转动。有人死去，有人将死，你也不例外。你感到血液在耳中轰鸣——请竭力阻止或逃离这场亲人间的屠杀。"
+
+        return "又一天开始了。尸体已经冰冷，但凶手仍在某处呼吸。你能信任谁？你能拯救谁？"
+
     async def _rate_limit(self):
         """限速：确保 turn_token 发放间隔不低于最小值。"""
         now = asyncio.get_event_loop().time()
@@ -99,6 +119,7 @@ class TokenRingEngine:
                         inventory_names.append(f"{name}（{state_desc}）")
                     else:
                         inventory_names.append(name)
+                situation = self._build_situation(role, slot)
                 msg = {
                     "type": "turn_token",
                     "seat_id": seat_id,
@@ -113,6 +134,7 @@ class TokenRingEngine:
                     "nearby_players": nearby,
                     "context": context,
                     "inventory": inventory_names,
+                    "situation": situation,
                     "id": msg_id,
                 }
                 if role in ("嘉音", "纱音"):
