@@ -334,12 +334,17 @@ class Orchestrator:
             await self._broadcast_notification("清晨事件", f"发现了新的死亡：\n{death_text}", severity="error")
         for role in list(self.state.alive_roles):
             self.state.locations[role] = "本馆"
-        # 薛定谔防护：嘉音和纱音不能同时出现在同一地点，否则第一个行动的角色会触发薛定谔崩溃
+        # 薛定谔系统：位置绑定 + 自动隐藏
         if "嘉音" in self.state.alive_roles and "纱音" in self.state.alive_roles:
-            if self.state.locations.get("嘉音") == self.state.locations.get("纱音"):
-                self.state.locations["嘉音"] = "别馆"
-                self._log_event("SYSTEM", "薛定谔防护：嘉音和纱音同时出现在同一地点，已将嘉音移至别馆")
-                print("[Orchestrator] 薛定谔防护：嘉音已移至别馆")
+            # 确保两人位置同步
+            self.state.bind_schrodinger_location("嘉音", "本馆")
+            # 初始化共享背包
+            self.location_engine.init_schrodinger_shared_inventory()
+            # 根据地点自动设置主导人格
+            anchor = self.state.auto_schrodinger_anchor_by_location("本馆")
+            self.state.set_schrodinger_anchor(anchor)
+            self._log_event("SYSTEM", f"薛定谔系统：嘉音与纱音位置绑定，主导人格设为 {anchor}")
+            print(f"[Orchestrator] 薛定谔系统：主导人格 {anchor}")
         if not deaths:
             await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
         self._log_event("SYSTEM", f"行动点重置为26，存活: {sorted(self.state.alive_roles)}")
@@ -857,32 +862,29 @@ class Orchestrator:
         if parsed.move_target:
             target_loc = parsed.move_target
             if target_loc in self.config.locations:
-                # 薛定谔防护：阻止嘉音/纱音移动到对方所在地点
-                schrodinger_blocked = False
-                if role in ("嘉音", "纱音"):
-                    other = "纱音" if role == "嘉音" else "嘉音"
-                    if other in self.state.alive_roles and self.state.locations.get(other) == target_loc:
-                        schrodinger_blocked = True
-                        await self.network.send_and_drain(seat, {
-                            "type": "notification", "title": "移动被阻止",
-                            "body": f"某种神秘力量阻止你前往{target_loc}……你感到一阵强烈的违和感，仿佛那里有你不该触碰的东西。", "severity": "warning"
-                        })
-                        self._log_event("SYSTEM", f"薛定谔防护：阻止{role}移动到{other}所在的{target_loc}")
-                if not schrodinger_blocked:
-                    dist = self.config.get_distance(location, target_loc)
-                    move_cost = self.state.get_action_point_cost(role, dist)
-                    if self.state.consume_action_point(role, move_cost) and self.state.use_investigation(role):
-                        self.state.locations[role] = target_loc
-                        location = target_loc  # 更新 location，用于后续薛定谔检查
-                        await self.action_engine.broadcast_action_visibility(
-                            role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
-                        )
-                        self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
+                dist = self.config.get_distance(location, target_loc)
+                move_cost = self.state.get_action_point_cost(role, dist)
+                if self.state.consume_action_point(role, move_cost) and self.state.use_investigation(role):
+                    # 位置绑定：嘉音/纱音移动时同步另一人
+                    if role in ("嘉音", "纱音"):
+                        self.state.bind_schrodinger_location(role, target_loc)
+                        # 移动后根据新地点自动切换主导人格
+                        anchor = self.state.auto_schrodinger_anchor_by_location(target_loc)
+                        if anchor != self.state.schrodinger_anchor:
+                            self.state.set_schrodinger_anchor(anchor)
+                            self._log_event("SYSTEM", f"薛定谔系统：进入{target_loc}，主导人格切换为 {anchor}")
                     else:
-                        await self.network.send_and_drain(seat, {
-                            "type": "notification", "title": "移动失败",
-                            "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
-                        })
+                        self.state.locations[role] = target_loc
+                    location = target_loc  # 更新 location，用于后续薛定谔检查
+                    await self.action_engine.broadcast_action_visibility(
+                        role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
+                    )
+                    self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
+                else:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "移动失败",
+                        "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
+                    })
             else:
                 await self.network.send_and_drain(seat, {
                     "type": "notification", "title": "移动失败",
@@ -932,17 +934,67 @@ class Orchestrator:
                     "body": "你没有躲在任何地方。", "severity": "warning"
                 })
 
+        # 切换隐藏（嘉音/纱音专属）
+        if parsed.switch_hide and role in ("嘉音", "纱音"):
+            other = "纱音" if role == "嘉音" else "嘉音"
+            loc_roles = [r for r in self.state.alive_roles if self.state.locations.get(r) == location]
+            third_parties = [r for r in loc_roles if r not in ("嘉音", "纱音")]
+            if third_parties:
+                msg_text = "命运般的力量阻止了你的行动，你意识到你的力量尚不足以与之抗衡" if role == "嘉音" else "命运般的力量阻止了你的行动，规则的约束无法逾越"
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动被阻止", "body": msg_text, "severity": "warning"
+                })
+            else:
+                cost = self.state.get_action_point_cost(role, 2)
+                if self.state.consume_action_point(role, cost):
+                    self.state.set_schrodinger_anchor(role)
+                    self._log_event("SYSTEM", f"薛定谔系统：{role} 消耗{cost}AP切换为主导人格")
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "切换", "body": "一股宿命的力量流转，你成为了此刻的主导。", "severity": "info"
+                    })
+                    other_seat_id = self.state.role_controller.get(other)
+                    other_seat = self.network.seats.get(other_seat_id) if other_seat_id else None
+                    if other_seat and other_seat.alive:
+                        await self.network.send_and_drain(other_seat, {
+                            "type": "notification", "title": "切换", "body": "一股宿命的力量流转，你退入了阴影之中。", "severity": "info"
+                        })
+                else:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "行动失败", "body": "行动点不足，无法切换。", "severity": "warning"
+                    })
+
+        # 现身（嘉音/纱音专属）
+        if parsed.reveal and role in ("嘉音", "纱音"):
+            other = "纱音" if role == "嘉音" else "嘉音"
+            loc_roles = [r for r in self.state.alive_roles if self.state.locations.get(r) == location]
+            third_parties = [r for r in loc_roles if r not in ("嘉音", "纱音")]
+            if third_parties:
+                self.state.force_conceal(role)
+                msg_text = "一股宿命的力量将你剥离现实，众人的声音仿佛离你远去，你的身躯无法触碰真实。"
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "现身失败", "body": msg_text, "severity": "warning"
+                })
+                self._log_event("SYSTEM", f"薛定谔系统：{role} 尝试现身但因第三人在场被强制恢复隐藏")
+            else:
+                self.state.schrodinger_revealed.add(role)
+                self._log_event("SYSTEM", f"薛定谔系统：{role} 尝试现身")
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "现身", "body": "你尝试挣脱宿命的束缚，向此刻所在之地显现。", "severity": "info"
+                })
+
         # 决斗（最高优先级，但为剧情关键始终执行）
         if parsed.duel_beatrice and role in ("嘉音", "纱音"):
             meta_ok = await self._execute_granted_action(role, "duel_beatrice", "", location, slot, seat)
             if not meta_ok:
                 await self._handle_duel(role, location)
 
-        # 薛定谔检查（始终执行）
-        if self.time_engine.is_free_slot(slot):
+        # 薛定谔检查：revealed 角色若被第三人看到则强制隐藏
+        if self.time_engine.is_free_slot(slot) and role in ("嘉音", "纱音"):
             issue = self.beatrice_engine.check_schrodinger(role, location)
             if issue:
-                await self._handle_schrodinger(issue)
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "宿命", "body": issue, "severity": "warning"
+                })
 
         self.narrative_log.append(f"Day{self.state.day} {slot} {role}: {action_text[:200]}")
 

@@ -54,15 +54,21 @@ class BeatriceEngine:
         return match.group(1) if match else "嘉音"
 
     def check_schrodinger(self, role: str, location: str) -> Optional[str]:
-        """检查单个角色行动是否触发薛定谔规则。返回issue或None。"""
+        """检查是否需要强制隐藏 revealed 角色。返回强制隐藏提示文本或 None。"""
         if role not in ("嘉音", "纱音"):
             return None
-        other = "纱音" if role == "嘉音" else "嘉音"
-        if other not in self.state.alive_roles:
+        if role not in self.state.schrodinger_revealed:
             return None
-        other_loc = self.state.locations.get(other)
-        if other_loc == location:
-            return f"薛定谔规则违反：嘉音和纱音同时出现在{location}"
+        # 检查该地点是否有非贝阿朵莉切的第三人
+        third_parties = [
+            r for r in self.state.alive_roles
+            if r != role and r != self.state.get_schrodinger_other(role)
+            and self.state.locations.get(r) == location
+            and r != "贝阿朵莉切"
+        ]
+        if third_parties:
+            self.state.force_conceal(role)
+            return "一股宿命的力量将你剥离现实，众人的声音仿佛离你远去，你的身躯无法触碰真实。"
         return None
 
     def teleport_beatrice(self, location: str) -> None:

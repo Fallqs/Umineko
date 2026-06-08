@@ -45,6 +45,9 @@ class ParsedAction:
     shoot_target: Optional[str] = None        # 射击目标
     threaten_target: Optional[str] = None     # 威胁目标
     autopsy: bool = False                     # 验尸
+    # 薛定谔切换/现身
+    switch_hide: bool = False                 # 切换隐藏（交换主导权）
+    reveal: bool = False                      # 尝试现身
 
 
 class ActionEngine:
@@ -178,6 +181,14 @@ class ActionEngine:
         if "决斗" in text and "贝阿朵" in text:
             result.duel_beatrice = True
 
+        # 切换隐藏（嘉音/纱音专用）
+        if any(k in text for k in ["切换", "换班", "交替", "交换"]):
+            result.switch_hide = True
+
+        # 现身（嘉音/纱音专用）
+        if any(k in text for k in ["现身", "显形", "出现", "走出来"]):
+            result.reveal = True
+
         # 即时移动（支持旧格式"移动到/前往/去/走向"和新格式"下轮移动："）
         move_match = re.search(r"(?:移动到|前往|去|走向|下轮移动)[了：:]?\s*([^。，！？、；：\s]+)", text)
         if move_match:
@@ -307,19 +318,63 @@ class ActionEngine:
     async def broadcast_speech(self, speaker_role: str, speech: str, range_limit: int = 0) -> None:
         if not speech:
             return
-        body = f"【{speaker_role}】{speech}"
-        for role, seat_id in self.state.role_controller.items():
-            if role == speaker_role:
-                continue
-            if not self._is_within_range(speaker_role, role, range_limit):
-                continue
-            seat = self.network.seats.get(seat_id)
-            if seat and seat.alive:
-                await self.network.send_and_drain(seat, {
-                    "type": "notification",
-                    "title": "同场发言",
-                    "body": body,
-                })
+
+        # 薛定谔隐藏角色：所有发言自动解析为 whisper（剥离已有 xml 标签）
+        if self.state.is_schrodinger_hidden(speaker_role):
+            # 剥离所有 xml 标签
+            clean = re.sub(r"<\/?[a-zA-Z][^>]*>", "", speech).strip()
+            if clean:
+                await self._send_whisper(speaker_role, clean)
+            return
+
+        # 提取 <whisper> 标签内容
+        whisper_match = re.search(r"<whisper>\s*(.+?)\s*</whisper>", speech, re.IGNORECASE)
+        whisper_text = whisper_match.group(1).strip() if whisper_match else None
+
+        # 移除 whisper 标签后的正文（用于普通广播）
+        public_speech = re.sub(r"<whisper>\s*(.+?)\s*</whisper>", "", speech, flags=re.IGNORECASE).strip()
+
+        # 嘉音/纱音的 whisper 发送给另一人格
+        if whisper_text and speaker_role in ("嘉音", "纱音"):
+            await self._send_whisper(speaker_role, whisper_text)
+
+        # 普通角色 whisper 不对外广播，仅自己可见（不发通知）
+        if whisper_text and speaker_role not in ("嘉音", "纱音"):
+            # 普通角色的 whisper 仅作为内心独白，不发任何通知
+            pass
+
+        # 广播公开发言（移除 whisper 后的正文）
+        if public_speech:
+            body = f"【{speaker_role}】{public_speech}"
+            for role, seat_id in self.state.role_controller.items():
+                if role == speaker_role:
+                    continue
+                if not self._is_within_range(speaker_role, role, range_limit):
+                    continue
+                seat = self.network.seats.get(seat_id)
+                if seat and seat.alive:
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification",
+                        "title": "同场发言",
+                        "body": body,
+                    })
+
+    async def _send_whisper(self, sender: str, text: str) -> None:
+        """向嘉音/纱音的另一人格发送 whisper（模糊化通知文案）。"""
+        other = self.state.get_schrodinger_other(sender)
+        if not other:
+            return
+        seat_id = self.state.role_controller.get(other)
+        if not seat_id:
+            return
+        seat = self.network.seats.get(seat_id)
+        if not seat or not seat.alive:
+            return
+        await self.network.send_and_drain(seat, {
+            "type": "notification",
+            "title": "心声",
+            "body": f"在场似乎只有你听见了{sender}的心声：\"{text}\"",
+        })
 
     async def broadcast_action_visibility(self, actor_role: str, action_desc: str, range_limit: int = 0, exclude_role: Optional[str] = None) -> None:
         """广播行为可见性：通知范围内的其他角色有人正在做某事。
@@ -330,6 +385,9 @@ class ActionEngine:
             range_limit: 作用距离（0=同地点，1=相邻，2=更远）
             exclude_role: 排除的角色（通常是行动者本人）
         """
+        # 薛定谔隐藏角色的行动不对任何第三方广播
+        if self.state.is_schrodinger_hidden(actor_role):
+            return
         body = f"{actor_role}{action_desc}"
         for role, seat_id in self.state.role_controller.items():
             if role == exclude_role:

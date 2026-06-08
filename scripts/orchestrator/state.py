@@ -61,6 +61,10 @@ class GameState:
     # 薛定谔规则
     schrodinger_violations: List[str] = field(default_factory=list)
 
+    # 三位一体·薛定谔隐藏系统（嘉音/纱音专用）
+    schrodinger_anchor: Optional[str] = None  # 当前主导人格（未隐藏者）
+    schrodinger_revealed: Set[str] = field(default_factory=set)  # 临时现身的角色
+
     # 死亡与计分
     death_order: List[str] = field(default_factory=list)
     settled_role_scores: Dict[str, int] = field(default_factory=dict)
@@ -359,7 +363,21 @@ class GameState:
     # ------------------------------------------------------------------
 
     def is_hidden(self, role: str) -> bool:
-        return role in self.hiding_spots
+        if role in self.hiding_spots:
+            return True
+        # 薛定谔隐藏：嘉音/纱音若不等于 anchor 且不在 revealed 集合，则隐藏
+        if role in ("嘉音", "纱音"):
+            if self.schrodinger_anchor and role != self.schrodinger_anchor and role not in self.schrodinger_revealed:
+                return True
+        return False
+
+    def is_schrodinger_hidden(self, role: str) -> bool:
+        """仅检查薛定谔隐藏状态（不含普通藏匿）。"""
+        if role not in ("嘉音", "纱音"):
+            return False
+        if self.schrodinger_anchor and role != self.schrodinger_anchor and role not in self.schrodinger_revealed:
+            return True
+        return False
 
     def hide_in(self, role: str, spot_id: str) -> bool:
         """将角色藏入藏匿点。"""
@@ -395,12 +413,16 @@ class GameState:
         - 非藏匿角色在地点中 → 对所有人可见
         - 藏匿角色 → 仅对同藏匿点内的其他藏匿者可见
         - 藏匿中的观察者可以看到同地点的非藏匿角色（偷听）
+        - 薛定谔隐藏角色 → 对任何人（包括另一人格）不可见
         """
         visible = []
         observer_spot = self.hiding_spots.get(observer) if observer else None
         for role in self.alive_roles:
             role_loc = self.locations.get(role, "本馆")
             if role_loc != location:
+                continue
+            # 薛定谔隐藏角色对任何观察者都不可见
+            if self.is_schrodinger_hidden(role):
                 continue
             spot = self.hiding_spots.get(role)
             if not spot:
@@ -558,7 +580,20 @@ class GameState:
         return item_id in self.containers.get(container_id, set())
 
     def get_container_items(self, container_id: str) -> Set[str]:
-        """获取角色背包中的物品 ID 集合。"""
+        """获取角色背包中的物品 ID 集合。
+        嘉音与纱音共享同一背包（指针指向同一 set 实例）。"""
+        if container_id in ("嘉音", "纱音"):
+            # 确保两人共享同一集合
+            if "嘉音" not in self.containers:
+                self.containers["嘉音"] = set()
+            if "纱音" not in self.containers:
+                self.containers["纱音"] = self.containers["嘉音"]
+            # 若因历史原因指向不同集合，强制合并并统一
+            if self.containers["嘉音"] is not self.containers["纱音"]:
+                unified = self.containers["嘉音"] | self.containers["纱音"]
+                self.containers["嘉音"] = unified
+                self.containers["纱音"] = unified
+            return set(self.containers["嘉音"])
         return set(self.containers.get(container_id, set()))
 
     def get_item_location(self, item_id: str) -> str:
@@ -807,3 +842,61 @@ class GameState:
         if self.schrodinger_violations:
             lines.append(f"薛定谔违规: {self.schrodinger_violations}")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # 薛定谔隐藏系统辅助方法
+    # ------------------------------------------------------------------
+
+    def bind_schrodinger_location(self, role: str, location: str) -> None:
+        """同步嘉音与纱音的位置。任意一方移动时，另一方自动跟随。"""
+        if role not in ("嘉音", "纱音"):
+            return
+        other = "纱音" if role == "嘉音" else "嘉音"
+        self.locations[role] = location
+        if other in self.alive_roles:
+            self.locations[other] = location
+
+    def set_schrodinger_anchor(self, role: str) -> None:
+        """设置主导人格，另一人自动进入隐藏。"""
+        if role not in ("嘉音", "纱音"):
+            return
+        self.schrodinger_anchor = role
+        self.schrodinger_revealed.discard(role)
+        other = "纱音" if role == "嘉音" else "嘉音"
+        self.schrodinger_revealed.discard(other)
+
+    def try_reveal(self, role: str) -> bool:
+        """尝试现身。若地点中仅有嘉音/纱音（无第三人），则成功。"""
+        if role not in ("嘉音", "纱音"):
+            return False
+        loc = self.locations.get(role, "本馆")
+        others = [r for r in self.alive_roles if r != role and self.locations.get(r) == loc and r not in ("嘉音", "纱音", "贝阿朵莉切")]
+        if others:
+            return False
+        self.schrodinger_revealed.add(role)
+        return True
+
+    def force_conceal(self, role: str) -> bool:
+        """强制恢复隐藏。"""
+        if role not in self.schrodinger_revealed:
+            return False
+        self.schrodinger_revealed.discard(role)
+        return True
+
+    def get_schrodinger_other(self, role: str) -> Optional[str]:
+        """获取另一人格名称。"""
+        if role == "嘉音":
+            return "纱音"
+        if role == "纱音":
+            return "嘉音"
+        return None
+
+    def auto_schrodinger_anchor_by_location(self, location: str) -> Optional[str]:
+        """根据地点自动决定主导人格。
+        嘉音地盘 → 嘉音主导；纱音地盘 → 纱音主导；其他 → 纱音主导（表人格优先）。"""
+        kanon_territory = {"玫瑰园", "庭院", "仓库", "镇守之森"}
+        shannon_territory = {"本馆", "餐厅", "厨房", "客房", "书房"}
+        if location in kanon_territory:
+            return "嘉音"
+        # 默认纱音主导（包括纱音地盘和其他地点）
+        return "纱音"

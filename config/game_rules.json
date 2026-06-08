@@ -11,6 +11,7 @@
     "gift": 1,
     "comfort": 1,
     "threaten": 1,
+    "switch_hide": 2,
     "move_per_distance_unit": 1
   },
   "token_ring": {
@@ -29,6 +30,8 @@
     "gift": 0,
     "comfort": 0,
     "autopsy": 0,
+    "switch_hide": 0,
+    "reveal": 0,
     "move": 0,
     "default": 0
   },

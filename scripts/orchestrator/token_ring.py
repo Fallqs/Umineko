@@ -78,6 +78,10 @@ class TokenRingEngine:
                 cost_multiplier = 2 if role in self.state.night_owl else 1
                 investigations_remaining = max(0, max_inv - self.state.get_investigations_used(role))
 
+                # 薛定谔隐藏角色：nearby 强制为空（对任何人不可见）
+                if self.state.is_schrodinger_hidden(role):
+                    nearby = []
+
                 context = self._build_context(role, slot, round_num, rounds, nearby, ap, cost_multiplier, investigations_remaining)
                 msg_id = f"turn_d{self.state.day}_{slot}_{seat_id}_r{round_num}"
                 # 携带背包信息（供 agent_wrapper 直接展示）
@@ -134,14 +138,27 @@ class TokenRingEngine:
 
     def _build_context(self, role, slot, round_num, total_rounds, nearby, ap, cost_multiplier, investigations_remaining: int = 2) -> str:
         location = self.state.locations.get(role, "本馆")
-        parts = [
-            f"【第{self.state.day}天 - {slot}】",
-            f"你在{location}。",
-            f"同场的有：{', '.join(nearby)}。" if nearby else "这里只有你一个人。",
-            f"当前是第 {round_num}/{total_rounds} 轮对话/行动。",
-            f"你剩余 {ap} 行动点。",
-            f"本时间槽还可进行调查：{investigations_remaining}/2 次。",
-        ]
+
+        # 薛定谔隐藏角色的宿命感描述
+        if self.state.is_schrodinger_hidden(role):
+            parts = [
+                f"【第{self.state.day}天 - {slot}】",
+                f"你在{location}。",
+                "一股宿命的力量将你剥离现实，众人的声音仿佛离你远去，你的身躯无法触碰真实。",
+                "连你的声音也变得稀薄。",
+                f"当前是第 {round_num}/{total_rounds} 轮对话/行动。",
+                f"你剩余 {ap} 行动点。",
+                f"本时间槽还可进行调查：{investigations_remaining}/2 次。",
+            ]
+        else:
+            parts = [
+                f"【第{self.state.day}天 - {slot}】",
+                f"你在{location}。",
+                f"同场的有：{', '.join(nearby)}。" if nearby else "这里只有你一个人。",
+                f"当前是第 {round_num}/{total_rounds} 轮对话/行动。",
+                f"你剩余 {ap} 行动点。",
+                f"本时间槽还可进行调查：{investigations_remaining}/2 次。",
+            ]
         if cost_multiplier > 1:
             parts.append("【熬夜惩罚】你的所有行动消耗变为2倍！")
 
@@ -190,6 +207,25 @@ class TokenRingEngine:
         parts.append("你可以选择：")
         action_lines = self.state.build_available_actions(role, investigations_remaining, nearby)
         parts.extend(action_lines)
+
+        # 全局 whisper 提示（所有角色）
+        parts.append("- 在发言中使用 <whisper>内容</whisper> 标签，可以发出只有自己能听见的声音……或许某人也能听见哦")
+
+        # 嘉音/纱音专属：切换/现身可用性提示
+        if role in ("嘉音", "纱音"):
+            # 检查地点中是否仅有嘉音+纱音两人
+            loc_roles = [r for r in self.state.alive_roles if self.state.locations.get(r) == location]
+            others = [r for r in loc_roles if r not in ("嘉音", "纱音")]
+            if not others:
+                parts.append("- 切换隐藏（消耗2行动点）")
+                parts.append("- 现身（不消耗行动点）")
+            else:
+                if role == "嘉音":
+                    parts.append("- 切换隐藏（不可用）：命运般的力量阻止了你的行动，你意识到你的力量尚不足以与之抗衡")
+                    parts.append("- 现身（不可用）：命运般的力量阻止了你的行动，你意识到你的力量尚不足以与之抗衡")
+                else:
+                    parts.append("- 切换隐藏（不可用）：命运般的力量阻止了你的行动，规则的约束无法逾越")
+                    parts.append("- 现身（不可用）：命运般的力量阻止了你的行动，规则的约束无法逾越")
 
         # 通用行动（从 game_rules.json 读取，所有角色可用）
         if self.config:
