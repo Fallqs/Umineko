@@ -1,7 +1,8 @@
 """
 《海猫鸣泣之时：六轩岛黄昏》贝阿朵引擎
 
-薛定谔规则检查、贝阿朵瞬移、决斗处理、BEATRICE复核队列。
+薛定谔规则检查、贝阿朵瞬移、决斗裁决。
+（已移除中心化 BEATRICE 审查，审查功能由每个 agent 的 GM Session 分布式处理）
 """
 
 import asyncio
@@ -16,89 +17,14 @@ class BeatriceEngine:
     def __init__(self, game_state: GameState, network: NetworkLayer):
         self.state = game_state
         self.network = network
-        self._review_queue: asyncio.Queue = asyncio.Queue()
-        self._worker_task: Optional[asyncio.Task] = None
 
     def start_worker(self) -> None:
-        if self._worker_task is None or self._worker_task.done():
-            self._worker_task = asyncio.create_task(self._review_worker())
+        """保留接口兼容，不再启动中心化审查 worker。"""
+        pass
 
     def stop_worker(self) -> None:
-        if self._worker_task:
-            self._review_queue.put_nowait(None)
-
-    async def _review_worker(self):
-        while True:
-            item = await self._review_queue.get()
-            if item is None:
-                break
-            seat_id, review, future = item
-            try:
-                result = await self._do_review(seat_id, review)
-                future.set_result(result)
-            except Exception as e:
-                if not future.done():
-                    future.set_exception(e)
-
-    async def _do_review(self, seat_id: str, review: dict) -> dict:
-        beatrice = self.network.seats.get("BEATRICE")
-        if not beatrice or not beatrice.alive:
-            return {"seat_id": seat_id, "action_text": review.get("action_text", ""), "result": "approve", "reason": "BEATRICE 离线，自动通过"}
-
-        role_name = self.network.seats.get(seat_id, SeatConnection(seat_id=seat_id, role_name="", reader=None, writer=None)).role_name
-        review_prompt = f"""【合规复核请求】
-seat: {seat_id}
-角色: {role_name}
-当前阶段: Day {self.state.day} {self.state.phase}
-玩家原始行动:
-{review.get('action_text', '')}
-请审查该行动是否合规。关注：
-1. 是否向他人泄露了该角色的核心隐藏信息
-2. 是否基于系统知识而非游戏内已发生事件进行推理
-3. 是否提前揭露全局真相
-4. 言行是否符合当前阶段的场景约束
-请给出明确的审查结果：
-<result>approve 或 reject</result>
-<reason>简要原因（1-2句）</reason>"""
-
-        msg = {
-            "type": "action_review",
-            "seat_id": seat_id,
-            "role_name": role_name,
-            "action_text": review.get("action_text", ""),
-            "text": review_prompt,
-            "id": f"beatrice_review_{seat_id}_{int(asyncio.get_event_loop().time()*1000000)}",
-        }
-        response = await self.network.request_response(beatrice, msg, timeout=180.0)
-        if not response:
-            return {"seat_id": seat_id, "action_text": review.get("action_text", ""), "result": "approve", "reason": "BEATRICE 响应超时，默认通过"}
-
-        # 优先使用 agent_wrapper 已解析的字段（新版已前置验证）
-        result = response.get("result", "")
-        reason = response.get("reason", "")
-
-        if result not in ("approve", "reject"):
-            # Fallback：从 text 字段解析 XML（兼容旧版或异常场景）
-            text = response.get("text", "")
-            result_match = re.search(r"<result>\s*(approve|reject)\s*</result>", text, re.IGNORECASE)
-            reason_match = re.search(r"<reason>\s*(.*?)\s*</reason>", text, re.DOTALL)
-            result = result_match.group(1).lower() if result_match else "approve"
-            reason = reason_match.group(1).strip() if reason_match else text[:200]
-
-        return {
-            "seat_id": seat_id,
-            "action_text": review.get("action_text", ""),
-            "result": result,
-            "reason": reason,
-        }
-
-    async def request_review(self, seat_id: str, action_text: str) -> dict:
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
-        await self._review_queue.put((seat_id, {"action_text": action_text}, future))
-        try:
-            return await asyncio.wait_for(future, timeout=600.0)
-        except asyncio.TimeoutError:
-            return {"seat_id": seat_id, "action_text": action_text, "result": "approve", "reason": "BEATRICE 复核队列超时，默认通过"}
+        """保留接口兼容。"""
+        pass
 
     async def request_judgment(self, issue: str, witnesses: List[str]) -> str:
         beatrice = self.network.seats.get("BEATRICE")

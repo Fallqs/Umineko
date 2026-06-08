@@ -1,19 +1,19 @@
 {
   "_comment": "预定死亡表。每条记录: day(第几天), phase(阶段), role(角色名), cause(死因描述)",
   "deaths": [
-    {"day": 2, "phase": "TWILIGHT", "role": "右代宫秀吉", "cause": "在别馆被发现身亡，胸口有猎枪弹孔"},
-    {"day": 3, "phase": "TWILIGHT", "role": "右代宫朱志香", "cause": "在客房内被发现，额头有枪伤"},
-    {"day": 4, "phase": "TWILIGHT", "role": "右代宫让治", "cause": "在餐厅中毒身亡"},
-    {"day": 4, "phase": "TWILIGHT", "role": "南条医师", "cause": "在书房被发现，死因不明"},
-    {"day": 5, "phase": "TWILIGHT", "role": "右代宫真里亚", "cause": "在玫瑰园失踪后被发现身亡"},
-    {"day": 5, "phase": "TWILIGHT", "role": "右代宫夏妃", "cause": "在本馆走廊被发现，身上有刀伤"},
-    {"day": 6, "phase": "TWILIGHT", "role": "嘉音", "cause": "在别馆厨房被发现，中毒身亡"},
-    {"day": 6, "phase": "TWILIGHT", "role": "纱音", "cause": "在客房内被发现，窒息身亡"},
-    {"day": 6, "phase": "TWILIGHT", "role": "右代宫雾江", "cause": "在庭院被发现，身上有枪伤"},
-    {"day": 7, "phase": "TWILIGHT", "role": "右代宫藏臼", "cause": "在地下密室被发现身亡"},
-    {"day": 7, "phase": "TWILIGHT", "role": "右代宫留弗夫", "cause": "在港口被发现，溺亡"},
-    {"day": 7, "phase": "TWILIGHT", "role": "右代宫楼座", "cause": "在神社附近被发现身亡"},
-    {"day": 7, "phase": "TWILIGHT", "role": "乡田", "cause": "在餐厅被发现，中毒身亡"},
-    {"day": 7, "phase": "TWILIGHT", "role": "熊泽", "cause": "在本馆被发现，死因不明"}
+    {"day": 2, "phase": "TWILIGHT", "role": "右代宫秀吉", "cause": "在别馆客房被发现死亡。心脏麻痹，面部表情极度惊恐，手中紧握一封撕碎的信（金藏写给他的威胁信）"},
+    {"day": 3, "phase": "TWILIGHT", "role": "右代宫朱志香", "cause": "独自进入地下密室，哮喘发作，吸入器不在身边。尸体在密室通道中被发现，手指在墙上留下抓痕"},
+    {"day": 4, "phase": "TWILIGHT", "role": "右代宫让治", "cause": "在纱音房间中发现大量神秘学书籍和碎裂的镜子，服用安眠药自杀，手中紧握给纱音的戒指"},
+    {"day": 4, "phase": "TWILIGHT", "role": "南条医师", "cause": "验尸让治时发现异常毒素，试图记录时突然心脏麻痹死亡"},
+    {"day": 5, "phase": "TWILIGHT", "role": "右代宫真里亚", "cause": "在神社祭具殿前被发现死亡。胸口有五角星伤口，周围有魔法阵，手中握着黑色玫瑰"},
+    {"day": 5, "phase": "TWILIGHT", "role": "右代宫夏妃", "cause": "得知朱志香死亡、藏臼即将崩溃、家族财产归零，从本馆二楼跃下"},
+    {"day": 6, "phase": "TWILIGHT", "role": "嘉音", "cause": "死于别馆玫瑰园，身体被玫瑰刺贯穿，周围有巨大魔法阵，手中握着剪刀和照片"},
+    {"day": 6, "phase": "TWILIGHT", "role": "纱音", "cause": "死于神社祭具殿内，躺在祭坛上，胸口插着黄金匕首，身穿贝阿朵莉切礼服"},
+    {"day": 6, "phase": "TWILIGHT", "role": "右代宫雾江", "cause": "在书房面对魔女肖像画，表情惊恐，手中有三枚空毒药胶囊"},
+    {"day": 7, "phase": "MIDNIGHT", "role": "右代宫藏臼", "cause": "在地下密室发现金藏终极秘密，精神崩溃自缢"},
+    {"day": 7, "phase": "MIDNIGHT", "role": "右代宫留弗夫", "cause": "试图乘船逃离时发现船只被破坏，在港口死亡"},
+    {"day": 7, "phase": "MIDNIGHT", "role": "右代宫楼座", "cause": "得知真里亚死亡、真里亚父亲身份、财产归零，持枪自杀"},
+    {"day": 7, "phase": "MIDNIGHT", "role": "乡田", "cause": "终局混乱中死亡"},
+    {"day": 7, "phase": "MIDNIGHT", "role": "熊泽", "cause": "终局混乱中死亡"}
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "_comment": "物品注册表。每个 item_id 对应唯一的物品实例。granted_actions 使用元行动(op)组合定义行为。",
+  "_comment": "物品注册表。每个 item_id 对应唯一的物品实例。granted_actions 使用元行动(op)组合定义行为。角色初始持有的物品 location 为空字符串，详见注释。",
   "items": [
     {
       "id": "revolver",
@@ -132,9 +132,9 @@
       "id": "diary_1986",
       "name": "金藏的日记",
       "type": "permanent",
-      "description": "一本封面写着'1986'的旧日记，上着一把小锁",
-      "player_desc": "你翻开这本日记，纸张已经发黄。里面记录着金藏对'黄金魔女'的研究。",
-      "gm_desc": "金藏从1986年开始的研究笔记，包含三代贝阿朵的身份线索。",
+      "description": "一本封面写着'1986'的旧日记，上着一把小锁，记录着金藏对黄金魔女的研究",
+      "player_desc": "你翻开这本日记，纸张已经发黄。里面记录着金藏对'黄金魔女'和三代贝阿朵身份的执念与调查。",
+      "gm_desc": "金藏从1986年开始的研究笔记，包含三代贝阿朵（瓦尔基莉亚、夏娃、安田纱代）的身份线索，以及他计划将财产献给'黄金魔女'的真实意图。",
       "location": "书房",
       "day_available": 1,
       "granted_actions": [
@@ -387,6 +387,827 @@
       "capacity": 10,
       "default_state": "closed",
       "default_visibility": "visible"
+    },
+    {
+      "id": "ritual_knife",
+      "name": "仪式刀",
+      "type": "permanent",
+      "description": "一柄刻有奇异符文的银质仪式刀，刀刃泛着冷光",
+      "player_desc": "你握着这柄仪式刀，刀身冰冷。刀柄上刻着你看不懂的符文，似乎是某种祭典器具。",
+      "gm_desc": "地下密室祭坛上的仪式刀。贝阿朵/纱音布置'魔女杀人'现场时使用的标志性凶器，用于制造'六人活祭'等仪式现场的假象。",
+      "location": "地下密室",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "threaten",
+          "name": "威胁",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 50,
+          "steps": [
+            {
+              "op": "broadcast",
+              "message": "{role} 举起仪式刀，指向 {target}！",
+              "exclude_self": true
+            },
+            {
+              "op": "notify_self",
+              "title": "威胁",
+              "body": "你举起仪式刀对准 {target}，气氛诡异而紧张。",
+              "severity": "warning"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 用仪式刀威胁 {target}"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "iron_pipe",
+      "name": "铁管",
+      "type": "permanent",
+      "description": "一根生锈的铁管，一端有些弯曲，但足以致命",
+      "player_desc": "你握着这根沉甸甸的铁管，表面锈迹斑斑，但挥动起来仍然很有杀伤力。",
+      "gm_desc": "港口船坞常见的铁管。贝阿朵击杀留弗夫时使用的凶器。",
+      "location": "港口",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "threaten",
+          "name": "威胁",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 50,
+          "steps": [
+            {
+              "op": "broadcast",
+              "message": "{role} 举起铁管，逼近 {target}！",
+              "exclude_self": true
+            },
+            {
+              "op": "notify_self",
+              "title": "威胁",
+              "body": "你举起铁管逼近 {target}，气氛紧张。",
+              "severity": "warning"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 用铁管威胁 {target}"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "poison_kiss_1",
+      "name": "魔女之吻（一）",
+      "type": "consumable",
+      "description": "一个精致的银色小瓶，标签上画着嘴唇的图案",
+      "player_desc": "你手中握着这瓶毒药，瓶身上用哥特字体写着'魔女之吻'。雾江似乎很珍视它。",
+      "gm_desc": "雾江持有的保命毒药之一（共三瓶）。微量即可致死的速效毒药，雾江计划用于极端情况下的自保或暗杀。",
+      "location": "",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "下毒",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {
+              "op": "consume_item"
+            },
+            {
+              "op": "notify_self",
+              "title": "下毒",
+              "body": "你将'魔女之吻'混入了 {target} 的饮食中...",
+              "severity": "error"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 对 {target} 使用了魔女之吻"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "poison_kiss_2",
+      "name": "魔女之吻（二）",
+      "type": "consumable",
+      "description": "一个精致的银色小瓶，标签上画着嘴唇的图案",
+      "player_desc": "你手中握着这瓶毒药，瓶身上用哥特字体写着'魔女之吻'。雾江似乎很珍视它。",
+      "gm_desc": "雾江持有的保命毒药之一（共三瓶）。微量即可致死的速效毒药。",
+      "location": "",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "下毒",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {
+              "op": "consume_item"
+            },
+            {
+              "op": "notify_self",
+              "title": "下毒",
+              "body": "你将'魔女之吻'混入了 {target} 的饮食中...",
+              "severity": "error"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 对 {target} 使用了魔女之吻"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "poison_kiss_3",
+      "name": "魔女之吻（三）",
+      "type": "consumable",
+      "description": "一个精致的银色小瓶，标签上画着嘴唇的图案",
+      "player_desc": "你手中握着这瓶毒药，瓶身上用哥特字体写着'魔女之吻'。雾江似乎很珍视它。",
+      "gm_desc": "雾江持有的保命毒药之一（共三瓶）。微量即可致死的速效毒药。",
+      "location": "",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "下毒",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {
+              "op": "consume_item"
+            },
+            {
+              "op": "notify_self",
+              "title": "下毒",
+              "body": "你将'魔女之吻'混入了 {target} 的饮食中...",
+              "severity": "error"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 对 {target} 使用了魔女之吻"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "poison_arsenic",
+      "name": "砒霜",
+      "type": "consumable",
+      "description": "一包白色粉末，装在普通的调味料袋里",
+      "player_desc": "你打开这包白色粉末，它看起来就像普通的盐或糖。但你清楚这是砒霜——慢性毒药。",
+      "gm_desc": "乡田厨房中发现的砒霜。金藏在生前长期被微量投毒，这包是剩余的储备。可用于伪造金藏'病死'的假象。",
+      "location": "厨房",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "使用砒霜",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {
+              "op": "consume_item"
+            },
+            {
+              "op": "notify_self",
+              "title": "下毒",
+              "body": "你将砒霜悄悄混入了 {target} 的食物中...",
+              "severity": "error"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 对 {target} 使用了砒霜"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "hallucinogenic_herbs",
+      "name": "致幻草药",
+      "type": "consumable",
+      "description": "一包干枯的紫色草药，散发着甜腻的香气",
+      "player_desc": "你拿着这包干枯的紫色草药，闻起来有一股让人眩晕的甜腻香气。不知为何，你感到一阵不安。",
+      "gm_desc": "乡田厨房冷藏室中发现的致幻草药。贝阿朵/纱音用于控制真里亚的精神状态，使她更容易接受'魔女存在'的叙事。",
+      "location": "厨房",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "使用致幻草药",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {
+              "op": "consume_item"
+            },
+            {
+              "op": "grant_buff",
+              "target": "{target}",
+              "buff_id": "hallucinating",
+              "duration": 3
+            },
+            {
+              "op": "notify_self",
+              "title": "使用草药",
+              "body": "你将致幻草药混入了 {target} 的饮料中...",
+              "severity": "error"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 对 {target} 使用了致幻草药"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "brass_key",
+      "name": "黄铜钥匙",
+      "type": "permanent",
+      "description": "一把古朴的黄铜钥匙，齿纹奇特，不像普通的门锁钥匙",
+      "player_desc": "你握着这把黄铜钥匙，它看起来有些年头了。钥匙上刻着一个小小六芒星。你感觉它能打开某个特殊的地方。",
+      "gm_desc": "朱志香持有的黄铜钥匙。这是通往地下密室的钥匙之一，金藏在生前秘密交给朱志香的。",
+      "location": "",
+      "day_available": 1,
+      "initial_state": {
+        "uses_remaining": 999
+      },
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "recorder",
+      "name": "小型录音机",
+      "type": "permanent",
+      "description": "一台老式的磁带录音机，外观陈旧但功能完好",
+      "player_desc": "你拿着这台老旧的磁带录音机。磁带已经录好了内容——一阵断断续续的咳嗽声和沙哑的低语。",
+      "gm_desc": "留弗夫持有的录音机。里面录有金藏的咳嗽声和模糊的低语，留弗夫计划用它伪造金藏仍然活着的假象，以拖延'金藏已死'的事实暴露。",
+      "location": "",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "播放录音",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "broadcast",
+              "message": "房间里传来一阵沙哑的咳嗽声和低语...听起来像是金藏老爷？",
+              "exclude_self": true
+            },
+            {
+              "op": "notify_self",
+              "title": "播放录音",
+              "body": "你播放了录音机中的磁带。沙哑的咳嗽声在房间中回荡——听起来确实像是金藏。",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 播放了录音机中的预录内容"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "broken_mirror",
+      "name": "碎裂的镜子",
+      "type": "permanent",
+      "description": "一面被摔碎的化妆镜，碎片散落在天鹅绒盒子里",
+      "player_desc": "你看着这面碎裂的镜子。每一块碎片都映照出你不同的面容——它们都是你自己，又似乎都不是。盒底刻着'S.K.'两个字母。",
+      "gm_desc": "纱音房间中发现的碎裂镜子。象征着纱音/嘉音/贝阿朵的'人格破碎'。盒子底部刻有'S.K.'（Shannon Kannon / Sayo Kanon / 安田纱代的缩写）。",
+      "location": "别馆",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "inhaler",
+      "name": "哮喘吸入器",
+      "type": "consumable",
+      "description": "一个蓝色的便携式哮喘吸入器，标签上写着'右代宫朱志香'",
+      "player_desc": "你握着这个蓝色的吸入器。这是你的救命药——没有它，你的哮喘发作可能会致命。",
+      "gm_desc": "朱志香的哮喘吸入器。关键保命道具。GM可以在游戏开始时选择是否提前取走此物品，制造朱志香哮喘发作的剧情杀条件。",
+      "location": "",
+      "day_available": 1,
+      "initial_state": {
+        "charges": 3
+      },
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "使用吸入器",
+          "ap_cost": 0,
+          "target_type": "none",
+          "priority": 100,
+          "steps": [
+            {
+              "op": "check_item_state",
+              "key": "charges",
+              "condition": ">0",
+              "error_msg": "吸入器已经空了。"
+            },
+            {
+              "op": "consume_item_state",
+              "key": "charges",
+              "delta": -1
+            },
+            {
+              "op": "remove_buff",
+              "buff_id": "asthma_attack"
+            },
+            {
+              "op": "notify_self",
+              "title": "急救",
+              "body": "你深吸一口药物，窒息感逐渐消退。（剩余 {item_state.charges} 次）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 使用了哮喘吸入器"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "shannon_ring",
+      "name": "纱音的戒指",
+      "type": "permanent",
+      "description": "一枚精致的银戒指，内侧刻着'S.G.'的字样",
+      "player_desc": "你看着这枚银戒指，内侧刻着'S.G.'——Shannon and George。这是让治送给你的，是你最珍贵的宝物。",
+      "gm_desc": "纱音持有的戒指，让治所赠。内侧刻有'S.G.'（Shannon & George）。在剧情中可以作为纱音与让治关系的证明。",
+      "location": "",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "george_ring",
+      "name": "让治的戒指",
+      "type": "permanent",
+      "description": "一枚简约的铂金戒指，内侧刻着'G.S.'的字样",
+      "player_desc": "你戴着这枚铂金戒指，内侧刻着'G.S.'——George and Shannon。这是你与纱音交换的誓言。",
+      "gm_desc": "让治持有的戒指，与纱音交换的定情之物。内侧刻有'G.S.'（George & Shannon）。",
+      "location": "",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "wax_figure",
+      "name": "蜡像",
+      "type": "permanent",
+      "description": "一具与真人等大的蜡像，面容模糊但可以穿上衣服伪装",
+      "player_desc": "你看着这具蜡像，它的面容是空白的，但身形与岛上某个人出奇地相似。如果穿上衣服、戴上假发...",
+      "gm_desc": "地下密室中的蜡像。贝阿朵/纱音用于制造嘉音或纱音'尸体'的伪装道具。穿上佣人服后可以以假乱真。",
+      "location": "地下密室",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "fake_blood",
+      "name": "假血与化妆道具",
+      "type": "consumable",
+      "description": "一套专业的舞台化妆道具，包括假血浆、伤口贴片和高光阴影粉",
+      "player_desc": "你打开这个化妆箱，里面装满了各种舞台道具——假血浆、伤口贴片、可以改变面容的阴影粉。",
+      "gm_desc": "地下密室中的假血与化妆道具。贝阿朵/纱音用于布置'魔女杀人'现场，伪造尸体和伤口。",
+      "location": "地下密室",
+      "day_available": 1,
+      "initial_state": {
+        "uses_remaining": 5
+      },
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "布置伪装",
+          "ap_cost": 2,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "check_item_state",
+              "key": "uses_remaining",
+              "condition": ">0",
+              "error_msg": "化妆道具已经用完了。"
+            },
+            {
+              "op": "consume_item_state",
+              "key": "uses_remaining",
+              "delta": -1
+            },
+            {
+              "op": "notify_self",
+              "title": "布置伪装",
+              "body": "你使用假血和化妆道具精心布置了现场...（剩余 {item_state.uses_remaining} 次）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 使用假血与化妆道具布置了伪装现场"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "gothic_dress",
+      "name": "贝阿朵的哥特礼服",
+      "type": "permanent",
+      "description": "一套华丽的黑色哥特式礼服，配有一顶金色的长假发",
+      "player_desc": "你抚摸着这套华丽的黑色礼服。它做工精细，面料沉重，旁边还放着一顶金色的长假发。穿上它，你可以化身为'黄金魔女'。",
+      "gm_desc": "纱音房间衣柜中藏着的贝阿朵莉切标志性服装。黑色哥特礼服配金色长假发，是纱音/安田纱代扮演'黄金魔女贝阿朵莉切'时的核心伪装。",
+      "location": "别馆",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "true_will",
+      "name": "金藏的真遗嘱",
+      "type": "permanent",
+      "description": "一份装在火漆信封中的文件，封口有右代宫家的纹章",
+      "player_desc": "你打开这份火漆封存的文件。上面是金藏亲笔书写的内容——'全部财产归于贝阿朵莉切'。这意味着...",
+      "gm_desc": "楼座持有的金藏真遗嘱。内容明确将所有财产'归于贝阿朵莉切'——这是金藏对安田纱代（第三代贝阿朵）的愧疚与补偿。",
+      "location": "",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "阅读遗嘱",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "unlock_info",
+              "info_id": "S-金藏真遗嘱"
+            },
+            {
+              "op": "notify_self",
+              "title": "阅读遗嘱",
+              "body": "你仔细阅读了金藏的真遗嘱。'全部财产归于贝阿朵莉切'——这颠覆了所有人的继承权。",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 阅读了金藏的真遗嘱"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "krauss_ledger",
+      "name": "藏臼的账本",
+      "type": "permanent",
+      "description": "一本藏在书房暗格中的黑色账本",
+      "player_desc": "你翻开这本黑色账本，里面密密麻麻记录着各种数字和日期。越往后翻，你的眉头皱得越紧——这是藏臼挪用家族资金的铁证。",
+      "gm_desc": "书房暗格中发现的藏臼账本。记录着藏臼挪用2亿日元家族资金的详细流水，是右代宫家长子贪污的确凿证据。",
+      "location": "书房",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "阅读账本",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "unlock_info",
+              "info_id": "S-藏臼账本"
+            },
+            {
+              "op": "notify_self",
+              "title": "阅读账本",
+              "body": "你仔细阅读了藏臼的账本，发现了挪用2亿日元的惊人秘密。（解锁信息）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 阅读了藏臼的账本"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "kinzo_suicide_note",
+      "name": "金藏的遗书",
+      "type": "permanent",
+      "description": "一张放在祭坛上的泛黄纸张，字迹狂乱而虔诚",
+      "player_desc": "你读着这张纸上的文字，金藏的字迹狂乱而虔诚。'我将全部财产献给贝阿朵莉切...愿黄金魔女永远统治六轩岛'。",
+      "gm_desc": "地下密室祭坛上的金藏遗书。内容声明'全部财产献给贝阿朵莉切'。这是金藏自杀前留下的，呼应了他对黄金魔女的执念。",
+      "location": "地下密室",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "阅读遗书",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "unlock_info",
+              "info_id": "S-金藏遗书"
+            },
+            {
+              "op": "notify_self",
+              "title": "阅读遗书",
+              "body": "你读完了金藏的遗书。'全部财产献给贝阿朵莉切'——这与表面的继承法完全矛盾。（解锁信息）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 阅读了金藏的遗书"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "newspaper_1967",
+      "name": "19年前报纸碎片",
+      "type": "permanent",
+      "description": "一张发黄破碎的报纸剪报，边角已经碳化",
+      "player_desc": "你拼凑着这张残破的报纸剪报。头条新闻的标题隐约可辨：'右代宫家佣人坠崖身亡'——日期是1967年。",
+      "gm_desc": "神社中发现的1967年报纸碎片。报道'右代宫家佣人坠崖身亡'——这与安田纱代的身世和三代贝阿朵的传说密切相关。",
+      "location": "神社",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "阅读剪报",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "unlock_info",
+              "info_id": "S-19年前报纸"
+            },
+            {
+              "op": "notify_self",
+              "title": "阅读剪报",
+              "body": "你仔细阅读了1967年的报纸碎片。'右代宫家佣人坠崖身亡'——这背后隐藏着什么？（解锁信息）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 阅读了19年前报纸碎片"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "hideyoshi_letter",
+      "name": "秀吉的威胁信",
+      "type": "permanent",
+      "description": "一封用火漆封口的信件，信封上有金藏的字迹",
+      "player_desc": "你拆开这封信，里面是金藏写给秀吉的威胁——要求他'永远保守那个秘密'，否则将'让一切真相大白'。",
+      "gm_desc": "别馆客房中发现的秀吉威胁信。金藏写给秀吉，威胁他保守某个秘密（与秀吉的商业诈骗和入赘右代宫家的黑历史有关）。",
+      "location": "别馆",
+      "day_available": 1,
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "阅读信件",
+          "ap_cost": 1,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "unlock_info",
+              "info_id": "S-秀吉威胁信"
+            },
+            {
+              "op": "notify_self",
+              "title": "阅读信件",
+              "body": "你读完了金藏写给秀吉的威胁信。'永远保守那个秘密'——秀吉究竟隐瞒了什么？（解锁信息）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 阅读了秀吉的威胁信"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "study_elevator",
+      "name": "书房电梯",
+      "type": "hiding_spot",
+      "description": "书房地毯下的隐藏电梯，通往地下密室",
+      "player_desc": "你掀开书房的地毯，露出一个精巧的机械装置——这是一部小型电梯，通往地下深处。",
+      "gm_desc": "本馆书房地毯下的隐藏电梯，通往地下密室。金藏建造的秘密通道之一。需要特定条件（如 brass_key 或 master_key）才能启动。",
+      "location": "书房",
+      "day_available": 1,
+      "is_container": false,
+      "is_hiding_spot": true,
+      "immovable": true,
+      "hiding_capacity": 2,
+      "default_state": "closed",
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "forest_stone_steps",
+      "name": "森林石阶",
+      "type": "hiding_spot",
+      "description": "镇守之森巨杉树洞内的隐藏石阶，通往地下密室",
+      "player_desc": "你拨开藤蔓，走进巨杉的树洞。树干内部竟然是空的，一条石阶蜿蜒向下，通往黑暗深处。",
+      "gm_desc": "镇守之森巨杉树洞内的隐藏石阶，通往地下密室。这是金藏修建的另一条秘密通道，较少为人知。",
+      "location": "神社",
+      "day_available": 1,
+      "is_container": false,
+      "is_hiding_spot": true,
+      "immovable": true,
+      "hiding_capacity": 2,
+      "default_state": "closed",
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "annex_passage",
+      "name": "别馆夹层通道",
+      "type": "hiding_spot",
+      "description": "嘉音房间与纱音房间之间的墙壁裂缝，一条狭窄的夹层通道",
+      "player_desc": "你推开墙壁上的裂缝，露出一条狭窄的夹层通道。它刚好能容一个人侧身通过——连接着嘉音和纱音的房间。",
+      "gm_desc": "别馆嘉音房间与纱音房间墙壁之间的夹层通道。这是安田纱代在'嘉音'与'纱音'两个人格/身份之间快速切换的核心通道。宽度仅容一人侧身通过。",
+      "location": "别馆",
+      "day_available": 1,
+      "is_container": false,
+      "is_hiding_spot": true,
+      "immovable": true,
+      "hiding_capacity": 1,
+      "default_state": "closed",
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "rose_garden_shaft",
+      "name": "玫瑰园竖井",
+      "type": "hiding_spot",
+      "description": "园丁小屋地板下的竖井，通往悬崖下方",
+      "player_desc": "你掀开园丁小屋的地板，露出一个深不见底的竖井。风声从下方传来——它通往悬崖下方。",
+      "gm_desc": "园丁小屋地板下的竖井，通往悬崖下方。可以用来隐藏尸体、快速撤离，或是制造'从悬崖坠落'的假象。",
+      "location": "玫瑰园",
+      "day_available": 1,
+      "is_container": false,
+      "is_hiding_spot": true,
+      "immovable": true,
+      "hiding_capacity": 3,
+      "default_state": "closed",
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "courtyard_aqueduct",
+      "name": "中庭暗渠",
+      "type": "hiding_spot",
+      "description": "庭院喷泉下方的狭窄暗渠，通往地下密室",
+      "player_desc": "你钻入喷泉下方的暗渠，空间异常狭窄，只能匍匐前进。前方传来潮湿的水声和微弱的气流。",
+      "gm_desc": "庭院喷泉下方的狭窄暗渠，通往地下密室。空间极为狭窄，仅容一人匍匐通过。是紧急情况下使用的秘密通道。",
+      "location": "庭院",
+      "day_available": 1,
+      "is_container": false,
+      "is_hiding_spot": true,
+      "immovable": true,
+      "hiding_capacity": 1,
+      "default_state": "closed",
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "sleeping_pills",
+      "name": "安眠药",
+      "type": "consumable",
+      "description": "一小瓶白色药片，瓶身上贴着处方标签",
+      "player_desc": "你倒出一粒白色药片。这是安眠药——吃下去可以让你沉入无梦的睡眠。",
+      "gm_desc": "夏妃房间/南条急救箱中的安眠药。夏妃长期服用。可用于自我催眠逃避现实，或在他人食物中下药使其昏睡。",
+      "location": "本馆",
+      "day_available": 1,
+      "initial_state": {
+        "doses": 10
+      },
+      "granted_actions": [
+        {
+          "id": "use",
+          "name": "服用安眠药",
+          "ap_cost": 0,
+          "target_type": "none",
+          "priority": 70,
+          "steps": [
+            {
+              "op": "check_item_state",
+              "key": "doses",
+              "condition": ">0",
+              "error_msg": "药瓶已经空了。"
+            },
+            {
+              "op": "consume_item_state",
+              "key": "doses",
+              "delta": -1
+            },
+            {
+              "op": "grant_buff",
+              "buff_id": "asleep",
+              "duration": 2
+            },
+            {
+              "op": "notify_self",
+              "title": "服药",
+              "body": "你服用了安眠药，困意迅速袭来...（剩余 {item_state.doses} 粒）",
+              "severity": "info"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 服用了安眠药"
+            }
+          ]
+        },
+        {
+          "id": "slip_into_drink",
+          "name": "混入饮食",
+          "ap_cost": 1,
+          "target_type": "role",
+          "priority": 80,
+          "steps": [
+            {
+              "op": "check_item_state",
+              "key": "doses",
+              "condition": ">0",
+              "error_msg": "药瓶已经空了。"
+            },
+            {
+              "op": "consume_item_state",
+              "key": "doses",
+              "delta": -1
+            },
+            {
+              "op": "grant_buff",
+              "target": "{target}",
+              "buff_id": "asleep",
+              "duration": 2
+            },
+            {
+              "op": "notify_self",
+              "title": "下药",
+              "body": "你将安眠药悄悄混入了 {target} 的饮食中...（剩余 {item_state.doses} 粒）",
+              "severity": "error"
+            },
+            {
+              "op": "log_event",
+              "event_type": "ACTION",
+              "message": "{role} 对 {target} 使用了安眠药"
+            }
+          ]
+        }
+      ],
+      "default_visibility": "hidden"
     }
   ]
 }

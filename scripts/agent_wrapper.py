@@ -283,6 +283,9 @@ class SeatAgent:
 
         # 休眠状态
         self.is_hibernating: bool = True
+        # 事件数量校验
+        self.received_event_count: int = 0
+        # 兼容旧机制（过渡期保留）
         self.hibernation_buffer: deque[dict] = deque(maxlen=200)
         self.pending_notifications: deque[dict] = deque()
 
@@ -296,6 +299,9 @@ class SeatAgent:
         # 网络
         self.orchestrator_reader: Optional[asyncio.StreamReader] = None
         self.orchestrator_writer: Optional[asyncio.StreamWriter] = None
+
+        # 预解析请求等待池
+        self._pending_preparse: dict[str, asyncio.Future] = {}
 
         self._running = True
         self._spectator = False
@@ -374,8 +380,20 @@ class SeatAgent:
                 except json.JSONDecodeError:
                     continue
                 msg_type = msg.get("type", "")
-                if msg_type != "register_ok":
+                if msg_type == "notification":
+                    # 事件数量校验：无论休眠状态如何，收到即计数
+                    self.received_event_count += 1
+                if msg_type not in ("register_ok", "notification"):
                     print(f"[Agent] [{self.seat_id}] Received: {msg_type} {msg.get('id', '')}")
+                elif msg_type == "notification" and msg.get("severity") == "error":
+                    print(f"[Agent] [{self.seat_id}] Received: {msg_type} [{msg.get('title', '')}] {msg.get('body', '')[:60]}")
+                # pre_parse_result 直接唤醒等待的 future，不入 GM 队列
+                if msg_type == "pre_parse_result":
+                    req_id = msg.get("request_id", "")
+                    future = self._pending_preparse.pop(req_id, None)
+                    if future and not future.done():
+                        future.set_result(msg)
+                    continue
                 await self.gm_input_queue.put(msg)
         except asyncio.CancelledError:
             pass
@@ -531,6 +549,163 @@ class SeatAgent:
         self.hibernation_buffer.clear()
         return out_text
 
+    # -----------------------------------------------------------------------
+    # 结构化行动解析与审查（新增）
+    # -----------------------------------------------------------------------
+
+    def _parse_player_output(self, text: str) -> dict:
+        """解析 Player Session 的输出，提取 $action / $sound / $argue。
+        返回包含解析结果的字典。"""
+        result = {
+            "action_text": "",
+            "speech": "",
+            "argue": "",
+            "move_target": "",
+            "investigate": False,
+            "investigate_target": "",
+            "is_valid": False,
+            "error_msg": "",
+        }
+        if not text:
+            result["error_msg"] = "输出为空"
+            return result
+
+        # 提取 $sound
+        sound_match = re.search(r'\$sound\s+"([^"]+)"', text)
+        if not sound_match:
+            sound_match = re.search(r'\$sound\s+(.+?)(?=\n\s*\$|\n*$)', text, re.DOTALL)
+        if sound_match:
+            result["speech"] = sound_match.group(1).strip()
+
+        # 提取 $action
+        action_match = re.search(r'\$action\s+(.+?)(?=\n\s*\$argue|\n\s*\$sound|\n*$)', text, re.DOTALL)
+        if not action_match:
+            action_match = re.search(r'\$action\s+(.+)', text, re.DOTALL)
+        if action_match:
+            action_content = action_match.group(1).strip()
+            result["action_text"] = action_content
+            # 提取子命令
+            move_match = re.search(r'下轮移动[：:]\s*(\S+)', action_content)
+            if move_match:
+                result["move_target"] = move_match.group(1).strip().rstrip('。，！？.!?')
+            inv_match = re.search(r'调查\s*(\S+)', action_content)
+            if inv_match:
+                result["investigate"] = True
+                target = inv_match.group(1).strip().rstrip('。，！？.!?')
+                if target not in ("了", "一下", "周围", "附近", "此地", "这里"):
+                    result["investigate_target"] = target
+
+        # 提取 $argue
+        argue_match = re.search(r'\$argue\s+(.+?)(?=\n\s*\$|\n*$)', text, re.DOTALL)
+        if argue_match:
+            result["argue"] = argue_match.group(1).strip()
+
+        # 验证：至少要有 $sound 或 $action
+        if not result["action_text"] and not result["speech"]:
+            result["error_msg"] = "输出格式错误：缺少 $action 或 $sound。请按格式要求输出。"
+            return result
+
+        result["is_valid"] = True
+        return result
+
+    async def _gm_review(self, buffer_text: str, parsed: dict) -> tuple[bool, str, dict]:
+        """调用 GM Session 做合规审查。
+        返回 (approved, reason, action_package)"""
+        if self.gm is None:
+            return True, "GM Session 未初始化，默认通过", parsed
+
+        sound_line = f'$sound "{parsed["speech"]}"' if parsed["speech"] else ""
+        action_line = f'$action {parsed["action_text"]}' if parsed["action_text"] else ""
+        argue_line = f'$argue {parsed["argue"]}' if parsed["argue"] else ""
+
+        role_name = self.role_dir.name
+        role_special = ""
+        if role_name == "贝阿朵莉切":
+            role_special = (
+                "你是黄金魔女贝阿朵莉切，拥有红字与金字能力。"
+                "你可以在发言中使用<red>绝对真实的陈述</red>和<gold>无需证明的真理</gold>。"
+                "你应当保持魔女的傲慢与神秘感，不要像普通人一样行动。"
+            )
+
+        prompt = self.prompt_loader.load_or_fallback(
+            "gm_review",
+            f"【GM合规审查】\n\n请审查以下行动是否合规：\n{sound_line}\n{action_line}\n{argue_line}\n\n"
+            f"上下文：\n{buffer_text}\n\n请输出 <result>approve|reject</result> 和 <reason>原因</reason>",
+            sound_line=sound_line,
+            action_line=action_line,
+            argue_line=argue_line,
+            buffer_text=buffer_text,
+            role_name=role_name,
+            role_special=role_special,
+        )
+
+        try:
+            out_text, _, _ = await self.gm.run_once(prompt)
+        except Exception as e:
+            print(f"[Agent] [GM] Review error: {e}")
+            return True, f"GM 审查异常（{e}），默认通过", parsed
+
+        # 解析 GM 输出
+        result_match = re.search(r'<result>\s*(approve|reject)\s*</result>', out_text, re.IGNORECASE)
+        reason_match = re.search(r'<reason>\s*(.*?)\s*</reason>', out_text, re.DOTALL)
+
+        approved = result_match is not None and result_match.group(1).lower() == "approve"
+        reason = reason_match.group(1).strip() if reason_match else "无原因"
+
+        # 提取 action_package（XML 格式）
+        action_package = dict(parsed)
+        pkg_match = re.search(r'<action_package>(.*?)</action_package>', out_text, re.DOTALL)
+        if pkg_match:
+            pkg_text = pkg_match.group(1).strip()
+            for tag in ["action_text", "speech", "move_target", "investigate_target"]:
+                tag_match = re.search(rf'<{tag}>(.*?)</{tag}>', pkg_text, re.DOTALL)
+                if tag_match:
+                    action_package[tag] = tag_match.group(1).strip()
+            inv_match = re.search(r'<investigate>(true|false)</investigate>', pkg_text, re.IGNORECASE)
+            if inv_match:
+                action_package["investigate"] = inv_match.group(1).lower() == "true"
+
+        return approved, reason, action_package
+
+    async def _pre_parse(self, action_package: dict) -> tuple[bool, str]:
+        """向 orchestrator 发送 pre_parse 请求，验证行动是否可解析。
+        返回 (success, error_msg)
+        
+        注意：只传递 action_text 和 move_target 给预解析，
+        speech（发言内容）不参与行动解析，避免日常对话中的"去""走向"等词被误识别为移动意图。"""
+        parts = []
+        if action_package.get("action_text"):
+            parts.append(action_package["action_text"])
+        if action_package.get("move_target"):
+            parts.append(f'下轮移动：{action_package["move_target"]}')
+        standardized = "\n".join(parts)
+        if not standardized:
+            return True, ""
+
+        request_id = f"preparse_{self.seat_id}_{asyncio.get_event_loop().time()}"
+        future = asyncio.get_event_loop().create_future()
+        self._pending_preparse[request_id] = future
+
+        self._send_to_orchestrator({
+            "type": "pre_parse",
+            "seat_id": self.seat_id,
+            "request_id": request_id,
+            "action_text": standardized,
+        })
+        await self._drain_orchestrator()
+
+        try:
+            result = await asyncio.wait_for(future, timeout=10.0)
+            if result.get("success"):
+                return True, ""
+            else:
+                return False, result.get("error", "预解析失败")
+        except asyncio.TimeoutError:
+            print(f"[Agent] pre_parse timeout for {request_id}")
+            return True, "预解析超时，默认通过"
+        finally:
+            self._pending_preparse.pop(request_id, None)
+
     async def _handle_turn_token(self, msg: dict):
         """处理 turn_token 消息——轮到该 seat 行动了。
         这是唯一的激活入口。行动结束后自动回到休眠。"""
@@ -551,85 +726,110 @@ class SeatAgent:
             self.is_hibernating = True
             return
 
-        # 1. 先让 GM 处理 hibernation_buffer（认知更新）
-        gm_summary = ""
-        if self.gm:
-            gm_summary = await self._process_hibernation_buffer()
+        # 1. 事件数量校验
+        expected_count = msg.get("expected_event_count", 0)
+        if expected_count > 0:
+            if self.received_event_count < expected_count:
+                missing = expected_count - self.received_event_count
+                print(f"[Agent] [{self.seat_id}] 事件校验警告：应收到 {expected_count} 条，实际收到 {self.received_event_count} 条，缺失 {missing} 条")
+            else:
+                print(f"[Agent] [{self.seat_id}] 事件校验通过：{self.received_event_count}/{expected_count}")
+            # 重置计数器（为下一轮做准备）
+            self.received_event_count = 0
 
-        # 2. 构造 prompt
-        prompt_parts = [
-            f"【轮到你的回合】",
-            f"时间：{slot}",
-            f"地点：{location}",
-            f"轮次：第{round_num}/{total_rounds}轮对话",
-            f"剩余行动点：{action_points}",
-            f"本时间槽剩余调查次数：{investigations_remaining}次",
-        ]
+        # 2. 提取完整的 buffer 文本（暂不清空，等审查通过后再清空）
+        # 合并 hibernation_buffer + pending_notifications
+        buffer_lines = []
+        for buf_msg in self.hibernation_buffer:
+            title = buf_msg.get("title", "")
+            body = buf_msg.get("body", "")
+            text = buf_msg.get("text", "")
+            if title and body:
+                buffer_lines.append(f"- [{title}] {body}")
+            elif text:
+                buffer_lines.append(f"- {text[:200]}")
+        # 合并未读的 pending notifications
+        if self.pending_notifications:
+            for n in self.pending_notifications:
+                title = n.get("title", "")
+                body = n.get("body", "")
+                if title and body:
+                    buffer_lines.append(f"- [{title}] {body}")
+            self.pending_notifications.clear()
+        buffer_text = "\n".join(buffer_lines) if buffer_lines else "（无新事件）"
 
-        # 背包信息（直接从 turn_token 消息中获取，无需再次查询）
+        # 2. 从模板加载 player prompt
         inventory = msg.get("inventory", [])
-        if inventory:
-            prompt_parts.append(f"你携带的物品：{', '.join(inventory)}")
-        else:
-            prompt_parts.append("你的背包是空的。")
-
-        # 3. 处理休眠期间收到的事件（直接展示 + GM 认知更新）
-        buffer_events = self._extract_buffer_events()
-        if buffer_events:
-            prompt_parts.append("\n\n【在你等待期间观察到的事件】")
-            for evt in buffer_events:
-                prompt_parts.append(f"- {evt}")
-
-        # 追加 GM 认知更新（深层解读，作为背景）
-        if gm_summary:
-            prompt_parts.append(f"\n\n【GM 内部认知更新】\n{gm_summary}")
+        inventory_str = ", ".join(inventory) if inventory else "（空）"
 
         if investigations_remaining > 0:
             investigate_desc = f"- 调查当前地点或指定对象（消耗2行动点，本时间槽剩余 {investigations_remaining}/2 次机会）"
         else:
             investigate_desc = "- 调查（本时间槽次数已用尽，本轮无法调查）"
 
-        # 从模板加载行动选项说明
-        actions_text = self.prompt_loader.load_or_fallback(
-            "turn_token_actions",
-            "\n\n请描述你的行动。每轮你都可以发言，也可以在其中最多2轮选择调查。行动可以是：\n"
-            "- 发言（消耗0行动点，同地点所有人能听到，每轮都可以说）\n"
+        prompt = self.prompt_loader.load_or_fallback(
+            "player_turn",
+            f"【轮到你的回合】\n"
+            f"时间：{slot}\n"
+            f"地点：{location}\n"
+            f"轮次：第{round_num}/{total_rounds}轮对话\n"
+            f"剩余行动点：{action_points}\n"
+            f"本时间槽剩余调查次数：{investigations_remaining}次\n"
+            f"你携带的物品：{inventory_str}\n\n"
+            f"【你观察到的上下文事件】\n{buffer_text}\n\n"
+            f"【可选行动】\n"
+            f"- 发言（消耗0行动点）\n"
             f"{investigate_desc}\n"
-            "- 使用背包中的物品（消耗1行动点）\n"
-            "- 赠送物品给同场的人\n"
-            "- 移动（消耗1-3行动点，取决于距离）\n"
-            "- 跳过\n\n"
-            "请用自然语言描述你的行动，例如：\"我仔细调查了书房的每个角落\"或\"我走向餐厅\"。"
-            "如果你希望下个时间点移动到其他地点，请在描述末尾声明：\"下轮移动：{地点名}\"",
+            f"- 使用背包中的物品（消耗1行动点）\n"
+            f"- 移动（消耗1-3行动点）\n"
+            f"- 跳过\n\n"
+            f"请用简洁的自然语言描述你的行动（200字以内）。",
+            time_slot=slot,
+            location=location,
+            round_num=str(round_num),
+            total_rounds=str(total_rounds),
+            action_points=str(action_points),
+            investigations_remaining=str(investigations_remaining),
+            inventory=inventory_str,
+            buffer_events=buffer_text,
             investigate_desc=investigate_desc,
-            max_investigations=2,
         )
-        prompt_parts.append(actions_text)
 
-        # 贝阿朵莉切特殊能力：红字/金字
+        # 贝阿朵莉切特殊能力
         if self.role_dir.name == "贝阿朵莉切":
             special_text = self.prompt_loader.load_or_fallback(
                 "beatrice_special",
-                "\n\n【特殊能力：红字与金字】"
-                "你是黄金魔女贝阿朵莉切。你可以在发言中使用以下 XML 标签："
-                "<red>绝对真实的陈述</red> —— 红字，一旦声明即为真实，不可反驳。"
-                "<gold>无需证明的真理</gold> —— 金字，比红字更高位的绝对真理。"
-                "你的 GM Session 会确保 red/gold 标签内的内容绝对真实，不要声明与已知真相矛盾的 red/gold 内容。",
+                "\n\n【身份：黄金魔女贝阿朵莉切】"
+                "你是传说中的黄金魔女，六轩岛真正的主人。你的存在本身就是一个谜。"
+                "你拥有红字与金字的能力，可以在发言中使用 <red>绝对真实的陈述</red> 和 <gold>无需证明的真理</gold>。"
+                "\n"
+                "【扮演要求】"
+                "1. 保持魔女的傲慢与神秘感。你的语气应当优雅、戏谑、带有居高临下的从容。"
+                "2. 不要像普通人一样关心日常琐事（早餐、天气、家务等）。你的关注点应该是仪式、命运、真相。"
+                "3. 你可以暗示自己知晓一切，但不要轻易揭示。谜题的乐趣在于让人类挣扎。"
+                "4. 对其他角色使用带有距离感的称呼，不要显得过于亲近。"
+                "5. 行动应当带有超自然色彩或象征意义，而非普通的调查/移动。"
+                "\n"
+                "【示例口吻】"
+                '- "人类的智慧真是渺小呢。不过，我喜欢看你们挣扎的样子。"'
+                '- "契约已经缔结。接下来的命运，谁也改变不了——<red>包括我自己</red>。"'
+                '- "去吧，去追寻你想要的真相。但记住，<gold>没有爱，就看不见。</gold>"',
             )
-            prompt_parts.append(special_text)
+            prompt = prompt + "\n" + special_text
 
-        prompt = "\n".join(prompt_parts)
-
-        # auto / beatrice 模式：交给 User Session
+        # auto / beatrice 模式：交给 User Session（_user_loop 会处理解析、审查、预解析）
         if self.mode in ("auto", "beatrice") and self.user:
-            await self.user_input_queue.put({"type": "input", "text": prompt, "id": msg_id})
-            # 不需要在这里发送 action，_user_loop 会处理
+            await self.user_input_queue.put({
+                "type": "input",
+                "text": prompt,
+                "id": msg_id,
+                "buffer_text": buffer_text,
+            })
             return
 
-        # human / npc 模式：直接用 GM Session 生成行动（npc 模式下 GM+User 合并）
+        # human / npc 模式：直接用 GM Session 生成行动（简化处理，不做审查预解析）
         if self.mode in ("human", "npc") and self.gm:
             try:
-                # npc 模式：从角色文档自动生成行为提示
                 if self.mode == "npc":
                     preset = build_npc_prompt(self.role_dir)
                     if preset:
@@ -805,24 +1005,21 @@ class SeatAgent:
                     pass
 
     async def _handle_notification(self, msg: dict):
-        """处理 orchestrator 发来的系统通知。"""
+        """处理 orchestrator 发来的系统通知。
+        注意：事件数量计数已在 _orchestrator_reader_loop 中完成。"""
+        # 兼容旧机制：按休眠状态分发到不同 buffer
         if self.is_hibernating:
-            # 休眠时存入 buffer（但如果 buffer 已处理过同类型的，可去重）
             self.hibernation_buffer.append(msg)
-            return
-
-        # 非休眠状态下，紧急通知立即处理，非紧急的暂存
-        if msg.get("urgent", False):
-            if self.mode == "human":
-                notif_text = f"【系统通知 - {msg.get('title', '')}】\n{msg.get('body', '')}"
-                try:
-                    await self.gm.run_once(notif_text)
-                except Exception:
-                    pass
-            else:
-                self.pending_notifications.append(msg)
         else:
             self.pending_notifications.append(msg)
+
+        # 人类模式：实时打印
+        if self.mode == "human":
+            title = msg.get("title", "")
+            body = msg.get("body", "")
+            severity = msg.get("severity", "info")
+            prefix = "⚠️" if severity == "error" else "ℹ️"
+            print(f"{prefix} [{title}] {body}")
 
     async def _handle_spectator_mode(self, msg: dict):
         """进入观察者模式。"""
@@ -935,7 +1132,7 @@ class SeatAgent:
     # -----------------------------------------------------------------------
 
     async def _user_loop(self):
-        """AI 模式下：消费 user_input_queue，运行 User Session，发送 action。"""
+        """AI 模式下：消费 user_input_queue，运行 User Session，解析、审查、预解析后发送 action。"""
         if self.user is None:
             return
         try:
@@ -948,25 +1145,74 @@ class SeatAgent:
                     continue
                 text = msg.get("text", "")
                 msg_id = msg.get("id", "")
+                buffer_text = msg.get("buffer_text", "")
                 print(f"[Agent] [USER] Input ({msg_id}): {text[:120]}...")
 
-                try:
-                    out_text, thinking_parts, _ = await self.user.run_once(text)
-                except Exception as e:
-                    print(f"[Agent] [USER] Error: {e}")
-                    traceback.print_exc()
-                    continue
+                success = False
+                current_prompt = text
+                for attempt in range(2):  # 最多 2 次尝试（原始 + 1 次重试）
+                    try:
+                        out_text, _, _ = await self.user.run_once(current_prompt)
+                    except Exception as e:
+                        print(f"[Agent] [USER] Error (attempt {attempt + 1}): {e}")
+                        traceback.print_exc()
+                        break
 
-                print(f"[Agent] [USER] Output ({msg_id}): {out_text[:120]}...")
+                    print(f"[Agent] [USER] Output ({msg_id}) attempt {attempt + 1}: {out_text[:120]}...")
 
-                # 新协议：直接发送 action
-                if msg_id.startswith("turn_"):
-                    await self._send_action(msg_id, out_text)
-                    # 发送 action 后立即回到休眠
+                    # 1. 解析结构化输出
+                    parsed = self._parse_player_output(out_text)
+                    if not parsed["is_valid"]:
+                        print(f"[Agent] [USER] 格式错误: {parsed['error_msg']}")
+                        current_prompt = (
+                            f"{text}\n\n"
+                            f"【格式错误】{parsed['error_msg']}\n"
+                            f"请修正输出格式，确保包含 $action 或 $sound。"
+                        )
+                        continue
+
+                    # 2. GM 合规审查
+                    approved, reason, action_package = await self._gm_review(buffer_text, parsed)
+                    if not approved:
+                        print(f"[Agent] [USER] GM 拒绝: {reason}")
+                        current_prompt = (
+                            f"{text}\n\n"
+                            f"【GM 审查未通过】{reason}\n"
+                            f"请根据反馈修正你的行动，确保不泄露核心秘密、符合角色设定。"
+                        )
+                        continue
+
+                    # 3. 前置预解析
+                    pre_ok, pre_err = await self._pre_parse(action_package)
+                    if not pre_ok:
+                        print(f"[Agent] [USER] 预解析失败: {pre_err}")
+                        current_prompt = (
+                            f"{text}\n\n"
+                            f"【行动解析失败】{pre_err}\n"
+                            f"请修正你的行动描述，确保目标地点/物品/角色名正确。"
+                        )
+                        continue
+
+                    # 全部通过，清空 buffer 并发送标准化 action
+                    self.hibernation_buffer.clear()
+                    parts = []
+                    if action_package.get("speech"):
+                        parts.append(f'"{action_package["speech"]}"')
+                    if action_package.get("action_text"):
+                        parts.append(action_package["action_text"])
+                    if action_package.get("move_target"):
+                        parts.append(f'下轮移动：{action_package["move_target"]}')
+                    standardized = "\n".join(parts)
+                    await self._send_action(msg_id, standardized or "...（沉默）")
                     self.is_hibernating = True
-                else:
-                    # 旧协议兼容：scene 触发发送 action_review
-                    await self._send_action_review(out_text, msg_id)
+                    success = True
+                    break
+
+                if not success and msg_id.startswith("turn_"):
+                    fallback = f"...（{self.role_dir.name}环顾四周，陷入沉思）"
+                    await self._send_action(msg_id, fallback)
+                    self.hibernation_buffer.clear()
+                    self.is_hibernating = True
         except asyncio.CancelledError:
             pass
 

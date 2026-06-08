@@ -20,6 +20,10 @@ def get_info_points(info_id: str) -> int:
     return 0
 
 
+# GM 角色豁免列表：不受行动点和调查次数限制
+GM_ROLES = {"贝阿朵莉切"}
+
+
 @dataclass
 class GameState:
     """全局游戏状态。所有方法只操作自身字段，不触发网络 IO。"""
@@ -129,6 +133,8 @@ class GameState:
     # ------------------------------------------------------------------
 
     def consume_action_point(self, role: str, cost: int = 1) -> bool:
+        if role in GM_ROLES:
+            return True
         current = self.action_points.get(role, 50)
         if current >= cost:
             self.action_points[role] = current - cost
@@ -136,11 +142,16 @@ class GameState:
         return False
 
     def refund_action_point(self, role: str, cost: int = 1):
+        if role in GM_ROLES:
+            return
         current = self.action_points.get(role, 0)
         self.action_points[role] = current + cost
 
     def reset_action_points(self, points: int = 26):
         for role in self.alive_roles:
+            # 跳过标记为无限行动点的角色（如贝阿朵莉切）
+            if self.action_points.get(role, 0) >= 900:
+                continue
             self.action_points[role] = points
 
     def get_action_point_cost(self, role: str, base_cost: int) -> int:
@@ -733,7 +744,9 @@ class GameState:
         return self.investigations_used_this_slot.get(role, 0)
 
     def use_investigation(self, role: str, max_per_slot: int = 2) -> bool:
-        """消耗一次调查次数。若未超过上限则成功。"""
+        """消耗一次调查次数。若未超过上限则成功。GM角色豁免。"""
+        if role in GM_ROLES:
+            return True
         used = self.investigations_used_this_slot.get(role, 0)
         if used >= max_per_slot:
             return False

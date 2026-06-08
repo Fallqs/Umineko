@@ -18,18 +18,30 @@ class TokenCallbacks(Protocol):
 
 
 class TokenRingEngine:
-    def __init__(self, game_state: GameState, network: NetworkLayer, callbacks: TokenCallbacks, config: Optional[ConfigLoader] = None):
+    def __init__(self, game_state: GameState, network: NetworkLayer, callbacks: TokenCallbacks, config: Optional[ConfigLoader] = None, seat_event_log=None):
         self.state = game_state
         self.network = network
         self.cb = callbacks
         self.config = config
+        self.seat_event_log = seat_event_log
         self._action_buffer: List[dict] = []
         self._action_event = asyncio.Event()
+        # 限速器：每 turn 最小间隔（秒），默认 5 秒
+        self._min_turn_interval = self._get_rule("min_turn_interval", 5.0)
+        self._last_turn_time = 0.0
 
     def _get_rule(self, key: str, default=None):
         if self.config:
             return self.config.get_token_ring_rule(key, default)
         return default
+
+    async def _rate_limit(self):
+        """限速：确保 turn_token 发放间隔不低于最小值。"""
+        now = asyncio.get_event_loop().time()
+        elapsed = now - self._last_turn_time
+        if elapsed < self._min_turn_interval:
+            await asyncio.sleep(self._min_turn_interval - elapsed)
+        self._last_turn_time = asyncio.get_event_loop().time()
 
     async def run(self, players: List[str], slot: str, rounds: Optional[int] = None) -> None:
         if not players:
@@ -99,6 +111,14 @@ class TokenRingEngine:
                 if role in ("嘉音", "纱音"):
                     msg["can_duel_beatrice"] = True
 
+                # 附带 expected_event_count：自该 seat 上次行动以来应收到的 notification 数量
+                # agent_wrapper 据此校验是否收到了全量消息
+                if self.seat_event_log is not None:
+                    expected_count = self.seat_event_log.pop(seat_id, 0)
+                    if expected_count:
+                        msg["expected_event_count"] = expected_count
+
+                await self._rate_limit()
                 print(f"[TokenRing] 🎫 turn_token -> {seat_id}({role}) at {location} round {round_num}/{rounds} (inv_remaining={investigations_remaining})")
                 await self.network.send_and_drain(seat, msg)
 
@@ -193,8 +213,17 @@ class TokenRingEngine:
                 parts.append(f"【专属】{action_name}（消耗{actual_cost}点）")
 
         parts.append("")
-        parts.append("请用自然语言描述你的行动和发言。")
-        parts.append('如果你希望移动到其他地点，请在描述中声明："移动到：{地点名}"')
+        parts.append("【重要：输出格式要求】")
+        parts.append("请用简洁的自然语言描述你的行动（200字以内），不要写小说式的心理描写、环境渲染或长篇对话。")
+        parts.append("你的输出应只包含：")
+        parts.append("1. 你做了什么（调查、移动、使用物品等）")
+        parts.append("2. 如有发言，直接写出说的话（控制在2-3句以内）")
+        parts.append('3. 如有移动意图，在末尾声明："下轮移动：{地点名}"')
+        parts.append("")
+        parts.append("示例：")
+        parts.append('"我调查了书桌抽屉，发现了一盘录音带。下轮移动：书房"')
+        parts.append('"纱音，你昨晚睡得好吗？下轮移动：餐厅"')
+        parts.append('"我走向中庭花园，看看玫瑰开得怎样。"')
         return "\n".join(parts)
 
     async def _wait_for_action(self, seat: SeatConnection, parent_id: str, timeout: float = 180.0) -> Optional[dict]:

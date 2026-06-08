@@ -178,10 +178,10 @@ class ActionEngine:
         if "决斗" in text and "贝阿朵" in text:
             result.duel_beatrice = True
 
-        # 即时移动
-        move_match = re.search(r"(?:移动到|前往|去|走向)[了：:]?\s*(\S+)", text)
+        # 即时移动（支持旧格式"移动到/前往/去/走向"和新格式"下轮移动："）
+        move_match = re.search(r"(?:移动到|前往|去|走向|下轮移动)[了：:]?\s*([^。，！？、；：\s]+)", text)
         if move_match:
-            result.move_target = move_match.group(1).strip().rstrip(chr(34) + "'()[]{}.,!?;:。，！？、；：")
+            result.move_target = move_match.group(1).strip()
 
         # 大喊（<shout> XML 标签）
         shout_match = re.search(r"<shout>\s*(.+?)\s*</shout>", text, re.IGNORECASE)

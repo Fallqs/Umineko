@@ -85,20 +85,22 @@ class Orchestrator:
         self.server = GameServer(host, port, self.network, msg_handler=self)
         self.pm = ProcessManager(self.root_dir, self._normalize_python_path(python_exe), self.network)
 
+        # 运行时状态（需在引擎初始化前完成）
+        self.narrative_log: List[str] = []
+        self.turn_counter = 0
+        self._game_start_triggered = False
+        # 事件数量校验：每个 seat 已发送 notification 计数
+        self.seat_event_log: Dict[str, int] = {}
+
         # 游戏逻辑引擎
         self.time_engine = TimeEngine(self.state, callbacks=self, config=self.config)
         self.location_engine = LocationEngine(self.state, self.config)
-        self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self, config=self.config)
+        self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self, config=self.config, seat_event_log=self.seat_event_log)
         self.action_engine = ActionEngine(self.state, self.config, self.network)
         self.meta_engine = MetaActionEngine(self.state, self.network, self.config)
         self.npc_engine = NPCEngine(self.state, self.pm, config=self.config)
         self.death_engine = DeathEngine(self.state, self.pm, self.network, config=self.config, log_callback=self._log_event)
         self.beatrice_engine = BeatriceEngine(self.state, self.network)
-
-        # 运行时状态
-        self.narrative_log: List[str] = []
-        self.turn_counter = 0
-        self._game_start_triggered = False
 
         # 叙事日志文件
         self._log_file = self.root_dir / "shared" / "logs" / "narrative.log"
@@ -140,8 +142,8 @@ class Orchestrator:
         if not self.mock_mode:
             await self._start_player_seats()
             await asyncio.sleep(0.5)
-            self.pm.start_seat("BEATRICE", "贝阿朵莉切", "beatrice", self.host, self.port)
-            await asyncio.sleep(0.5)
+            # BEATRICE 不再作为中心化审查进程启动，仅保留薛定谔检查功能
+            # 若贝阿朵莉切作为角色参与，由 seat chain 或手动启动
         # 初始化角色位置
         for role in self.state.alive_roles:
             self.state.locations[role] = self.location_engine.get_initial_location(role)
@@ -192,12 +194,23 @@ class Orchestrator:
         if seat.seat_id == "BEATRICE":
             # BEATRICE特殊注册：不消耗行动点，可自由现身
             if role:
+                # 如果该角色已被NPC控制，回收NPC
+                old_controller = self.state.role_controller.get(role)
+                if old_controller and old_controller.startswith("NPC_"):
+                    self.npc_engine.terminate_npc(role)
+                # 从等待列表中移除（BEATRICE已接管）
+                self.npc_engine._launched_npc_roles.discard(role)
                 self.state.role_controller[role] = seat.seat_id
                 self.state.alive_roles.add(role)
                 self.state.action_points[role] = 999  # 标记为无限
         elif seat.seat_id.startswith("NPC_"):
             # NPC注册：与普通玩家同级
             if role:
+                # 如果该角色已被非NPC控制，跳过NPC注册
+                old_controller = self.state.role_controller.get(role)
+                if old_controller and not old_controller.startswith("NPC_"):
+                    print(f"[Orchestrator] NPC_{role} 注册被拒绝：该角色已被 {old_controller} 控制")
+                    return
                 self.state.record_role_for_seat(seat.seat_id, role)
                 self.state.role_controller[role] = seat.seat_id
                 if role not in self.state.action_points:
@@ -209,6 +222,10 @@ class Orchestrator:
         else:
             # 普通玩家seat
             if role:
+                # 如果该角色已被NPC控制，回收NPC
+                old_controller = self.state.role_controller.get(role)
+                if old_controller and old_controller.startswith("NPC_"):
+                    self.npc_engine.terminate_npc(role)
                 self.state.record_role_for_seat(seat.seat_id, role)
                 self.state.role_controller[role] = seat.seat_id
                 if role not in self.state.action_points:
@@ -250,9 +267,21 @@ class Orchestrator:
                 s for s in self.network.seats.values()
                 if s.seat_id != "BEATRICE" and not s.seat_id.startswith("NPC_")
             ]
+            registered_ids = {s.seat_id for s in self.network.seats.values()}
+            # 强制检查：必须包含战人(P1)
+            if "P1" not in registered_ids:
+                print("[Orchestrator] 等待 P1（右代宫战人）注册...")
+                return
+            # 非 mock 模式下还必须包含贝阿朵(BEATRICE)
+            if not self.mock_mode and "BEATRICE" not in registered_ids:
+                print("[Orchestrator] 等待 BEATRICE（贝阿朵莉切）注册...")
+                return
             if len(player_seats) >= self.min_seats:
                 self._game_start_triggered = True
-                print(f"[Orchestrator] 已注册 {len(player_seats)} 个玩家seat，达到最小要求 {self.min_seats}，启动游戏循环")
+                print(f"[Orchestrator] 已注册 {len(player_seats)} 个玩家seat（含战人和贝阿朵），达到最小要求 {self.min_seats}，启动游戏循环")
+                # mock模式下外部脚本手动控制player seats，但NPC仍需自动启动
+                if self.mock_mode:
+                    self.npc_engine.start_all_npcs(self.host, self.port)
                 asyncio.create_task(self.run_game())
 
     async def on_action(self, seat: SeatConnection, msg: dict) -> None:
@@ -305,6 +334,12 @@ class Orchestrator:
             await self._broadcast_notification("清晨事件", f"发现了新的死亡：\n{death_text}", severity="error")
         for role in list(self.state.alive_roles):
             self.state.locations[role] = "本馆"
+        # 薛定谔防护：嘉音和纱音不能同时出现在同一地点，否则第一个行动的角色会触发薛定谔崩溃
+        if "嘉音" in self.state.alive_roles and "纱音" in self.state.alive_roles:
+            if self.state.locations.get("嘉音") == self.state.locations.get("纱音"):
+                self.state.locations["嘉音"] = "别馆"
+                self._log_event("SYSTEM", "薛定谔防护：嘉音和纱音同时出现在同一地点，已将嘉音移至别馆")
+                print("[Orchestrator] 薛定谔防护：嘉音已移至别馆")
         if not deaths:
             await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
         self._log_event("SYSTEM", f"行动点重置为26，存活: {sorted(self.state.alive_roles)}")
@@ -822,19 +857,32 @@ class Orchestrator:
         if parsed.move_target:
             target_loc = parsed.move_target
             if target_loc in self.config.locations:
-                dist = self.config.get_distance(location, target_loc)
-                move_cost = self.state.get_action_point_cost(role, dist)
-                if self.state.consume_action_point(role, move_cost) and self.state.use_investigation(role):
-                    self.state.locations[role] = target_loc
-                    await self.action_engine.broadcast_action_visibility(
-                        role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
-                    )
-                    self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
-                else:
-                    await self.network.send_and_drain(seat, {
-                        "type": "notification", "title": "移动失败",
-                        "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
-                    })
+                # 薛定谔防护：阻止嘉音/纱音移动到对方所在地点
+                schrodinger_blocked = False
+                if role in ("嘉音", "纱音"):
+                    other = "纱音" if role == "嘉音" else "嘉音"
+                    if other in self.state.alive_roles and self.state.locations.get(other) == target_loc:
+                        schrodinger_blocked = True
+                        await self.network.send_and_drain(seat, {
+                            "type": "notification", "title": "移动被阻止",
+                            "body": f"某种神秘力量阻止你前往{target_loc}……你感到一阵强烈的违和感，仿佛那里有你不该触碰的东西。", "severity": "warning"
+                        })
+                        self._log_event("SYSTEM", f"薛定谔防护：阻止{role}移动到{other}所在的{target_loc}")
+                if not schrodinger_blocked:
+                    dist = self.config.get_distance(location, target_loc)
+                    move_cost = self.state.get_action_point_cost(role, dist)
+                    if self.state.consume_action_point(role, move_cost) and self.state.use_investigation(role):
+                        self.state.locations[role] = target_loc
+                        location = target_loc  # 更新 location，用于后续薛定谔检查
+                        await self.action_engine.broadcast_action_visibility(
+                            role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
+                        )
+                        self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
+                    else:
+                        await self.network.send_and_drain(seat, {
+                            "type": "notification", "title": "移动失败",
+                            "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
+                        })
             else:
                 await self.network.send_and_drain(seat, {
                     "type": "notification", "title": "移动失败",
@@ -898,6 +946,34 @@ class Orchestrator:
 
         self.narrative_log.append(f"Day{self.state.day} {slot} {role}: {action_text[:200]}")
 
+    async def on_pre_parse(self, seat: SeatConnection, msg: dict) -> None:
+        """处理 agent 发来的前置预解析请求。验证行动是否可解析。"""
+        action_text = msg.get("action_text", "")
+        request_id = msg.get("request_id", "")
+
+        # 调用 action_engine 解析（nearby_roles 传空，仅做基础验证）
+        parsed = self.action_engine.parse(action_text, nearby_roles=[])
+
+        # 检查明显错误
+        errors = []
+        if parsed.move_target and parsed.move_target not in self.config.locations:
+            errors.append(f"未知地点: {parsed.move_target}")
+
+        if errors:
+            await self.network.send_and_drain(seat, {
+                "type": "pre_parse_result",
+                "request_id": request_id,
+                "success": False,
+                "error": "; ".join(errors),
+            })
+        else:
+            await self.network.send_and_drain(seat, {
+                "type": "pre_parse_result",
+                "request_id": request_id,
+                "success": True,
+                "error": "",
+            })
+
     # ------------------------------------------------------------------
     # 特殊事件
     # ------------------------------------------------------------------
@@ -953,13 +1029,16 @@ class Orchestrator:
         for seat_id in sorted(targets):
             seat = self.network.seats.get(seat_id)
             if seat and seat.alive:
-                await self.network.send_and_drain(seat, {
+                event = {
                     "type": "notification",
                     "seat_id": seat_id,
                     "title": title,
                     "body": body,
                     "severity": severity,
-                })
+                }
+                await self.network.send_and_drain(seat, event)
+                # 计数，由 turn_token 附带 expected_event_count 校验
+                self.seat_event_log[seat_id] = self.seat_event_log.get(seat_id, 0) + 1
 
     # ------------------------------------------------------------------
     # Orchestration 请求处理（兼容旧版）
@@ -1020,6 +1099,20 @@ class Orchestrator:
         await asyncio.sleep(2)
         await self._broadcast_system_rules()
         await asyncio.sleep(1)
+        # 等待所有已启动的NPC进程注册完成
+        expected_npcs = self.npc_engine._launched_npc_roles
+        if expected_npcs:
+            print(f"[Orchestrator] 等待 {len(expected_npcs)} 个NPC注册: {expected_npcs}")
+            for _ in range(60):  # 最多等待60秒
+                registered_npcs = {s.role_name for s in self.network.seats.values() if s.seat_id.startswith("NPC_")}
+                missing = expected_npcs - registered_npcs
+                if not missing:
+                    print(f"[Orchestrator] 所有NPC已注册，开始游戏")
+                    break
+                await asyncio.sleep(1)
+            else:
+                missing = expected_npcs - {s.role_name for s in self.network.seats.values() if s.seat_id.startswith("NPC_")}
+                print(f"[Orchestrator] 警告：以下NPC未在60秒内注册: {missing}，继续游戏")
         while self.state.day <= self.max_day:
             if not any(s.alive for s in self.network.seats.values() if s.seat_id != "BEATRICE" and not s.seat_id.startswith("NPC_")):
                 print("[Orchestrator] 无存活玩家seat，游戏结束。")

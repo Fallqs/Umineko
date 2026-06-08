@@ -20,6 +20,7 @@ class MessageHandler(Protocol):
     async def on_orchestration_request(self, seat: SeatConnection, msg: dict) -> None: ...
     async def on_action_review_result(self, seat: SeatConnection, msg: dict) -> None: ...
     async def on_schrodinger_judgment_result(self, seat: SeatConnection, msg: dict) -> None: ...
+    async def on_pre_parse(self, seat: SeatConnection, msg: dict) -> None: ...
 
 
 class GameServer:
@@ -175,5 +176,7 @@ class GameServer:
             await self.msg_handler.on_action_review_result(seat, msg)
         elif msg_type == "schrodinger_judgment_result":
             await self.msg_handler.on_schrodinger_judgment_result(seat, msg)
+        elif msg_type == "pre_parse":
+            await self.msg_handler.on_pre_parse(seat, msg)
         else:
             print(f"[GameServer] Unknown message type from {seat.seat_id}: {msg_type}")
