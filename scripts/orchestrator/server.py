@@ -31,6 +31,7 @@ class GameServer:
         self.msg_handler = msg_handler
         self.server: Optional[asyncio.Server] = None
         self._shutdown_event = asyncio.Event()
+        self._handler_tasks: set = set()
 
     async def start(self) -> None:
         self.server = await asyncio.start_server(self._handle_client, self.host, self.port)
@@ -40,11 +41,18 @@ class GameServer:
     async def stop(self) -> None:
         if self.server:
             self.server.close()
-            await self.server.wait_closed()
+            # 强制取消所有活跃 handler，避免 Windows 下 wait_closed() 无限挂起
+            for task in list(self._handler_tasks):
+                if not task.done():
+                    task.cancel()
+            try:
+                await asyncio.wait_for(self.server.wait_closed(), timeout=5.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
         for seat in list(self.network.seats.values()):
             try:
                 seat.writer.close()
-                await seat.writer.wait_closed()
+                # Windows 下 await wait_closed() 可能挂起，仅关闭不等待
             except Exception:
                 pass
 
@@ -60,6 +68,9 @@ class GameServer:
         self._shutdown_event.set()
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        task = asyncio.current_task()
+        if task:
+            self._handler_tasks.add(task)
         addr = writer.get_extra_info("peername")
         print(f"[GameServer] Client connected from {addr}")
         seat: Optional[SeatConnection] = None
@@ -121,6 +132,8 @@ class GameServer:
             import traceback
             traceback.print_exc()
         finally:
+            if task:
+                self._handler_tasks.discard(task)
             if seat:
                 seat.alive = False
                 self.network.seats.pop(seat.seat_id, None)
@@ -134,7 +147,10 @@ class GameServer:
     async def _seat_reader_loop(self, seat: SeatConnection):
         try:
             while seat.alive and not seat.reader.at_eof():
-                line = await seat.reader.readline()
+                try:
+                    line = await asyncio.wait_for(seat.reader.readline(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    break
                 if not line:
                     break
                 try:

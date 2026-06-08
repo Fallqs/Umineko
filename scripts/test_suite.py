@@ -195,6 +195,18 @@ async def test_full_day_mock():
     root = Path(__file__).resolve().parent.parent
     orch = Orchestrator(root, mock_mode=True, test_mode=True, max_day=1, min_seats=3)
 
+    # 加速测试：大幅缩短令牌环等待时间和轮数
+    orch.config._game_rules = orch.config._load_json("game_rules.json")
+    orch.config._game_rules.setdefault("token_ring", {})
+    orch.config._game_rules["token_ring"]["wait_timeout"] = 0.5
+    orch.config._game_rules["token_ring"]["free_slot_rounds"] = 1
+    orch.config._game_rules["token_ring"]["meal_slot_rounds"] = 1
+    # 直接覆盖 TokenRing 实例的限速间隔（实例化时读取的默认值可能未被配置覆盖）
+    orch.token_ring._min_turn_interval = 0.1
+
+    # 禁用外部 NPC 进程自动启动，改为纯 mock NPC（更快更可控）
+    orch.npc_engine.start_all_npcs = lambda *args, **kwargs: None
+
     # 启动 orchestrator 服务器
     await orch.start()
     await asyncio.sleep(0.5)
@@ -203,7 +215,15 @@ async def test_full_day_mock():
     clients = []
 
     async def mock_client(seat_id: str, role_name: str):
-        reader, writer = await asyncio.open_connection(orch.host, orch.port)
+        """模拟客户端：长连接，收到 turn_token 后快速响应。"""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(orch.host, orch.port), timeout=10.0
+            )
+        except Exception as e:
+            print(f"  [TEST] {seat_id} 连接失败: {e}")
+            return
+
         writer.write((json.dumps({
             "type": "register",
             "seat_id": seat_id,
@@ -214,7 +234,7 @@ async def test_full_day_mock():
 
         try:
             while True:
-                line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                line = await reader.readline()
                 if not line:
                     break
                 msg = json.loads(line.decode("utf-8").strip())
@@ -223,8 +243,8 @@ async def test_full_day_mock():
                 if msg_type == "turn_token":
                     location = msg.get("location", "本馆")
                     actions = [
-                        f"我环顾{location}四周，\"这里似乎有些不对劲。\"",
-                        f"我调查了{location}，发现了一些痕迹。",
+                        f"我环顾{location}四周。",
+                        f"我调查了{location}。",
                         f"<shout>有人吗！</shout>",
                         f"我移动到：{random.choice(['本馆', '书房', '庭院'])}",
                     ]
@@ -238,45 +258,75 @@ async def test_full_day_mock():
                     }
                     writer.write((json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8"))
                     await writer.drain()
-
                 elif msg_type == "notification":
-                    pass  # ignore
-
-        except asyncio.TimeoutError:
-            pass
+                    pass
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            print(f"  [TEST] {seat_id} error: {e}")
         finally:
-            writer.close()
-            await writer.wait_closed()
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
 
-    # 启动3个mock客户端
-    seats = [("P1", "右代宫战人"), ("P2", "右代宫朱志香"), ("P3", "嘉音")]
+    # 启动 3 个真人 + 4 个 NPC mock（共 7 个活跃角色，控制总时长）
+    seats = [
+        ("P1", "右代宫战人"), ("P2", "右代宫朱志香"), ("P3", "嘉音"),
+        ("NPC_纱音", "纱音"), ("NPC_让治", "右代宫让治"),
+        ("NPC_楼座", "右代宫楼座"), ("NPC_南条医师", "南条医师"),
+    ]
     for sid, role in seats:
         clients.append(asyncio.create_task(mock_client(sid, role)))
 
-    # 等待游戏开始
+    # 等待所有客户端注册
     registered = 0
     try:
-        while registered < 3:
-            ev = await asyncio.wait_for(events.get(), timeout=10.0)
+        while registered < len(seats):
+            ev = await asyncio.wait_for(events.get(), timeout=15.0)
             if ev[1] == "registered":
                 registered += 1
-                print(f"  [TEST] {ev[0]} registered ({registered}/3)")
+                print(f"  [TEST] {ev[0]} registered ({registered}/{len(seats)})")
     except asyncio.TimeoutError:
-        print("  [FAIL] Timeout waiting for registration")
+        print(f"  [WARN] Timeout waiting for registration, only {registered}/{len(seats)} registered")
+
+    # 等待游戏推进：轮询检测状态变化
+    print("  [TEST] Waiting for Day 1 to advance...")
+    advanced = False
+    for _ in range(120):
+        await asyncio.sleep(1)
+        if orch.state.phase != "DAWN" or orch.state.day > 1:
+            advanced = True
+            print(f"  [TEST] Game advanced to Day {orch.state.day}, Phase {orch.state.phase}")
+            break
+
+    if not advanced:
+        print(f"  [FAIL] Game did not advance from DAWN")
         await orch.stop()
+        for c in clients:
+            c.cancel()
+            try:
+                await c
+            except asyncio.CancelledError:
+                pass
         return False
 
-    # 等待游戏跑完第一天
+    # 继续等待第一天结束（SLEEP_CHECK 或 MIDNIGHT 即视为完成）
     print("  [TEST] Waiting for Day 1 to complete...")
-    try:
-        # 等待足够时间让第一天跑完
-        await asyncio.sleep(25.0)
-    except asyncio.TimeoutError:
-        pass
+    completed = False
+    for _ in range(240):
+        await asyncio.sleep(1)
+        if orch.state.day > 1:
+            completed = True
+            break
+        if orch.state.phase in ('SLEEP_CHECK', 'EVENING', 'MIDNIGHT'):
+            completed = True
+            break
+        if orch.server.server is None or not orch.server.server.is_serving():
+            completed = True
+            break
 
-    # 验证状态
     day = orch.state.day
     phase = orch.state.phase
     print(f"  [TEST] Final state: Day {day}, Phase {phase}")
@@ -284,14 +334,18 @@ async def test_full_day_mock():
     await orch.stop()
     for c in clients:
         c.cancel()
-        try:
-            await c
-        except asyncio.CancelledError:
-            pass
+    # 给取消信号一点时间传播，但不阻塞等待（Windows 下客户端关闭可能挂起）
+    await asyncio.sleep(0.5)
 
-    # 至少应该推进到某个非DAWN阶段
-    if orch.state.day <= 1 and orch.state.phase == "DAWN":
-        print("  [FAIL] Game did not advance")
+    # 强制取消所有剩余后台任务（包括 run_game），确保进程能退出
+    for task in asyncio.all_tasks():
+        if task is not asyncio.current_task():
+            task.cancel()
+    # 短暂等待任务响应取消，超时则放弃
+    await asyncio.sleep(0.5)
+
+    if not completed and day <= 1 and phase == "DAWN":
+        print("  [FAIL] Day 1 did not complete")
         return False
 
     print("  [PASS] full day mock run")

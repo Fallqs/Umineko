@@ -66,6 +66,7 @@ class Orchestrator:
         self.min_seats = min_seats or (len(self.active_seats) + 1)
         self.python_exe = python_exe
         self.max_day = max_day
+        self._stop_requested = False
 
         self.state = GameState()
         # 注入物品注册表（若配置存在则加载，否则为空）
@@ -153,6 +154,8 @@ class Orchestrator:
 
     async def stop(self):
         print("[Orchestrator] Shutting down...")
+        self._stop_requested = True
+        self.state._stop_requested = True
         self.server.shutdown()
         self.beatrice_engine.stop_worker()
         self.pm.terminate_all()
@@ -1165,9 +1168,11 @@ class Orchestrator:
             else:
                 missing = expected_npcs - {s.role_name for s in self.network.seats.values() if s.seat_id.startswith("NPC_")}
                 print(f"[Orchestrator] 警告：以下NPC未在60秒内注册: {missing}，继续游戏")
-        while self.state.day <= self.max_day:
+        while self.state.day <= self.max_day and not self._stop_requested:
             if not any(s.alive for s in self.network.seats.values() if s.seat_id != "BEATRICE" and not s.seat_id.startswith("NPC_")):
                 print("[Orchestrator] 无存活玩家seat，游戏结束。")
+                break
+            if self._stop_requested:
                 break
             await self.time_engine.run_day()
             self.state.day += 1

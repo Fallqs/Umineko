@@ -77,6 +77,8 @@ class TimeEngine:
         special_slots = self._get_special_slots()
 
         for slot in time_slots:
+            if getattr(self.state, "_stop_requested", False):
+                break
             self.state.phase = slot
             if slot in special_slots and slot == "DAWN":
                 await self.cb.on_dawn()

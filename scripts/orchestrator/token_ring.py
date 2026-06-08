@@ -60,6 +60,9 @@ class TokenRingEngine:
 
         for round_num in range(1, rounds + 1):
             for role in players:
+                if getattr(self.state, "_stop_requested", False) or getattr(self.cb, "_stop_requested", False):
+                    print("[TokenRing] 收到停止请求，中断令牌环")
+                    return
                 if role in self.state.sleeping:
                     continue
                 seat_id = self.state.role_controller.get(role)

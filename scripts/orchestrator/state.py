@@ -83,6 +83,9 @@ class GameState:
     # 贝阿朵
     beatrice_actions: List[str] = field(default_factory=list)
 
+    # 停止标志（用于测试和优雅关闭）
+    _stop_requested: bool = False
+
     # ------------------------------------------------------------------
     # 物品系统（Phase B 架构）
     # ------------------------------------------------------------------
