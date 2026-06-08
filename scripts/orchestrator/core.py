@@ -863,7 +863,7 @@ class Orchestrator:
 
         # 即时移动
         if parsed.move_target:
-            target_loc = parsed.move_target
+            target_loc = self.config.normalize_location(parsed.move_target)
             if target_loc in self.config.locations:
                 dist = self.config.get_distance(location, target_loc)
                 move_cost = self.state.get_action_point_cost(role, dist)
@@ -1009,10 +1009,12 @@ class Orchestrator:
         # 调用 action_engine 解析（nearby_roles 传空，仅做基础验证）
         parsed = self.action_engine.parse(action_text, nearby_roles=[])
 
-        # 检查明显错误
+        # 检查明显错误（支持多级地点归一化）
         errors = []
-        if parsed.move_target and parsed.move_target not in self.config.locations:
-            errors.append(f"未知地点: {parsed.move_target}")
+        if parsed.move_target:
+            normalized = self.config.normalize_location(parsed.move_target)
+            if normalized not in self.config.locations:
+                errors.append(f"未知地点: {parsed.move_target}")
 
         if errors:
             await self.network.send_and_drain(seat, {

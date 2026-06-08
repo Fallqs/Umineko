@@ -15,6 +15,7 @@ class ConfigLoader:
     def __init__(self, config_dir: Path):
         self.config_dir = Path(config_dir)
         self._locations: Optional[List[str]] = None
+        self._sub_locations: Optional[Dict[str, str]] = None
         self._role_locs: Optional[Dict[str, str]] = None
         self._info_table: Optional[Dict[str, Dict[int, List[Tuple[str, str]]]]] = None
         self._distances: Optional[Dict[str, Dict[str, int]]] = None
@@ -35,6 +36,32 @@ class ConfigLoader:
         if self._locations is None:
             self._locations = self._load_json("locations.json")["locations"]
         return self._locations
+
+    @property
+    def sub_locations(self) -> Dict[str, str]:
+        if self._sub_locations is None:
+            raw = self._load_json("locations.json")
+            self._sub_locations = raw.get("sub_locations", {})
+        return self._sub_locations
+
+    def normalize_location(self, loc: str) -> str:
+        """将多级/子地点归一化为系统认可的一级地点名。"""
+        if not loc:
+            return loc
+        # 1. 已是一级地点
+        if loc in self.locations:
+            return loc
+        # 2. 显式子地点映射
+        mapped = self.sub_locations.get(loc)
+        if mapped:
+            return mapped
+        # 3. 按 '-' 拆分，取第一部分匹配
+        if "-" in loc:
+            parent = loc.split("-")[0]
+            if parent in self.locations:
+                return parent
+        # 4. 无法归一化，返回原值让上层处理
+        return loc
 
     @property
     def role_initial_locations(self) -> Dict[str, str]:
