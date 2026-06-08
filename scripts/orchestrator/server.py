@@ -148,7 +148,8 @@ class GameServer:
         try:
             while seat.alive and not seat.reader.at_eof():
                 try:
-                    line = await asyncio.wait_for(seat.reader.readline(), timeout=5.0)
+                    # 延长超时以容纳 agent 处理 turn_token 所需的 LLM 推理时间
+                    line = await asyncio.wait_for(seat.reader.readline(), timeout=60.0)
                 except asyncio.TimeoutError:
                     break
                 if not line:
