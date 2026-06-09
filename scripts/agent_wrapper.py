@@ -1212,6 +1212,8 @@ class SeatAgent:
                 text = msg.get("text", "")
                 msg_id = msg.get("id", "")
                 buffer_text = msg.get("buffer_text", "")
+                if buffer_text and buffer_text != "（无新事件）":
+                    print(f"[Agent] [USER] Buffer ({msg_id}): {buffer_text[:200]}...")
                 print(f"[Agent] [USER] Input ({msg_id}): {text[:120]}...")
 
                 success = False
