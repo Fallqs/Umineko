@@ -245,5 +245,17 @@
       "中庭": 3,
       "仓库": 5
     }
+  },
+  "doors": {
+    "书房": {
+      "key_item": "key:书房",
+      "default_state": "locked",
+      "description": "金藏书房的厚重红木门"
+    },
+    "客房": {
+      "key_item": "key:客房",
+      "default_state": "unlocked",
+      "description": "客房门"
+    }
   }
 }

@@ -1208,6 +1208,50 @@
         }
       ],
       "default_visibility": "hidden"
+    },
+    {
+      "id": "key:书房",
+      "name": "书房钥匙",
+      "type": "permanent",
+      "description": "一把古旧的黄铜钥匙，上面刻着书房的花纹",
+      "player_desc": "你握着这把古旧的黄铜钥匙，上面刻着书房的花纹。",
+      "gm_desc": "金藏书房的钥匙，可以上锁/解锁书房的门。",
+      "location": "书房",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "key:客房",
+      "name": "客房钥匙",
+      "type": "permanent",
+      "description": "一把普通的客房钥匙",
+      "player_desc": "你握着这把普通的客房钥匙。",
+      "gm_desc": "客房的钥匙，可以上锁/解锁客房的门。",
+      "location": "客房",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "key:万能",
+      "name": "万能钥匙",
+      "type": "permanent",
+      "description": "一把沉甸甸的万能钥匙，可以开启任何门",
+      "player_desc": "你握着这把沉甸甸的万能钥匙。管家代代相传，可以开启六轩岛上的任何一扇门。",
+      "gm_desc": "管家的万能钥匙，可以上锁/解锁任何门。",
+      "location": "void",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "axe",
+      "name": "斧头",
+      "type": "permanent",
+      "description": "一把锋利的斧头，可以破坏门锁",
+      "player_desc": "你握着这把锋利的斧头。刀刃闪着寒光，足以劈开任何木门。",
+      "gm_desc": "仓库里的斧头，可以用来永久性破坏门锁。",
+      "location": "仓库",
+      "day_available": 1,
+      "default_visibility": "hidden"
     }
   ]
 }

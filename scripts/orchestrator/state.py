@@ -138,6 +138,9 @@ class GameState:
     # 当前时间槽内每个角色已使用的调查次数（10 轮对话 + 最多 2 次调查）
     investigations_used_this_slot: Dict[str, int] = field(default_factory=dict)
 
+    # 门状态：location -> "locked" | "unlocked" | "broken"
+    door_states: Dict[str, str] = field(default_factory=dict)
+
     # ------------------------------------------------------------------
     # 行动点操作
     # ------------------------------------------------------------------
@@ -585,6 +588,36 @@ class GameState:
     def has_item(self, container_id: str, item_id: str) -> bool:
         """检查角色是否持有指定物品。"""
         return item_id in self.containers.get(container_id, set())
+
+    def can_enter_location(self, role: str, location: str, door_config: Optional[dict] = None) -> tuple[bool, str]:
+        """检查角色是否可以进入有门的地点。
+        返回 (能否进入, 原因/提示)。"""
+        state = self.door_states.get(location)
+        if state is None:
+            return True, ""  # 无门
+        if state == "broken" or state == "unlocked":
+            return True, ""
+        # locked
+        if door_config:
+            key_item = door_config.get("key_item")
+            if key_item and self.has_item(role, key_item):
+                return True, f"用{self.item_registry.get(key_item, {}).get('name', '钥匙')}打开了门"
+            if self.has_item(role, "key:万能"):
+                return True, "用万能钥匙打开了门"
+        return False, f"{location}的门锁着，需要钥匙才能进入"
+
+    def auto_acquire_room_key(self, role: str, location: str) -> Optional[str]:
+        """角色进入地点时，自动拾取该地点的钥匙（如果钥匙在地点里且角色没有）。
+        返回拾取的钥匙 item_id，或 None。"""
+        for item_id, item in self.item_registry.items():
+            if not item_id.startswith("key:"):
+                continue
+            current_loc = self.item_locations.get(item_id, "")
+            if current_loc == f"map:{location}":
+                if not self.has_item(role, item_id):
+                    if self.add_item(role, item_id):
+                        return item_id
+        return None
 
     def get_container_items(self, container_id: str) -> Set[str]:
         """获取角色背包中的物品 ID 集合。

@@ -23,6 +23,7 @@ class ConfigLoader:
         self._game_rules: Optional[dict] = None
         self._time_slots: Optional[dict] = None
         self._buffs: Optional[dict] = None
+        self._doors: Optional[Dict[str, dict]] = None
 
     def _load_json(self, filename: str) -> dict:
         path = self.config_dir / filename
@@ -140,6 +141,17 @@ class ConfigLoader:
             except FileNotFoundError:
                 self._items = {}
         return self._items
+
+    @property
+    def doors(self) -> Dict[str, dict]:
+        """加载门锁配置。格式: {location: door_config_dict}。
+        若 locations.json 中无 doors 字段则返回空字典。"""
+        if self._doors is None:
+            try:
+                self._doors = self._load_json("locations.json").get("doors", {})
+            except FileNotFoundError:
+                self._doors = {}
+        return self._doors
 
     @property
     def game_rules(self) -> dict:

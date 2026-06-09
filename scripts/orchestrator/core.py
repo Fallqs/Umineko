@@ -85,6 +85,12 @@ class Orchestrator:
                 self.state.container_states[item_id] = default_state
         # 注入 buff 定义注册表（供 hook 系统使用）
         self.state.buff_registry = dict(self.config.buffs)
+        # 初始化门状态
+        for loc, door_config in self.config.doors.items():
+            self.state.door_states[loc] = door_config.get("default_state", "locked")
+        # 管家获得万能钥匙
+        if "key:万能" in self.state.item_registry:
+            self.state.add_item("熊泽", "key:万能")
         self.network = NetworkLayer()
         self.access_token = secrets.token_urlsafe(16)
         self.server = GameServer(host, port, self.network, msg_handler=self, access_token=self.access_token)
@@ -829,6 +835,35 @@ class Orchestrator:
                 })
             special_executed = True
 
+        # 门锁操作（上锁 / 解锁 / 破坏）
+        if not special_executed and (parsed.lock_target or parsed.unlock_target or parsed.use_axe_target):
+            cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("lock") if hasattr(self.config, "get_ap_cost") else 1)
+            if self.state.consume_action_point(role, cost):
+                if parsed.lock_target:
+                    lock_result = await self.action_engine.execute_lock(role, parsed.lock_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "上锁", "body": lock_result, "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 上锁: {lock_result[:100]}")
+                elif parsed.unlock_target:
+                    unlock_result = await self.action_engine.execute_unlock(role, parsed.unlock_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "解锁", "body": unlock_result, "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 解锁: {unlock_result[:100]}")
+                elif parsed.use_axe_target:
+                    axe_result = await self.action_engine.execute_use_axe(role, parsed.use_axe_target, seat)
+                    await self.network.send_and_drain(seat, {
+                        "type": "notification", "title": "破坏", "body": axe_result, "severity": "info"
+                    })
+                    self._log_event("ACTION", f"{role} 破坏门: {axe_result[:100]}")
+            else:
+                await self.network.send_and_drain(seat, {
+                    "type": "notification", "title": "行动失败",
+                    "body": "行动点不足，无法操作门锁。", "severity": "warning"
+                })
+            special_executed = True
+
         # 赠送物品——必须指定具体物品；所有物品默认可赠送，配置了 gift action 的走元行动
         if not special_executed and parsed.gift_target and parsed.gift_item:
             cost = self.state.get_action_point_cost(role, self.config.get_ap_cost("gift") if hasattr(self.config, "get_ap_cost") else 1)
@@ -990,29 +1025,53 @@ class Orchestrator:
         if parsed.move_target:
             target_loc = self.config.normalize_location(parsed.move_target)
             if target_loc in self.config.locations:
-                dist = self.config.get_distance(location, target_loc)
-                move_cost = self.state.get_action_point_cost(role, dist)
-                if self.state.consume_action_point(role, move_cost):
-                    # 位置绑定：嘉音/纱音移动时同步另一人
-                    if role in ("嘉音", "纱音"):
-                        self.state.bind_schrodinger_location(role, target_loc)
-                        # 移动后根据新地点自动切换主导人格
-                        anchor = self.state.auto_schrodinger_anchor_by_location(target_loc)
-                        if anchor != self.state.schrodinger_anchor:
-                            self.state.set_schrodinger_anchor(anchor)
-                            self._log_event("SYSTEM", f"薛定谔系统：进入{target_loc}，主导人格切换为 {anchor}")
+                # 检查门锁
+                door_config = self.config.doors.get(target_loc)
+                move_blocked = False
+                if door_config:
+                    can_enter, reason = self.state.can_enter_location(role, target_loc, door_config)
+                    if not can_enter:
+                        await self.network.send_and_drain(seat, {
+                            "type": "notification", "title": "移动失败",
+                            "body": reason, "severity": "warning"
+                        })
+                        self._log_event("MOVE_BLOCKED", f"{role} 无法进入 {target_loc}: {reason}")
+                        move_blocked = True
+                    elif reason:
+                        self._log_event("MOVE", f"{role} {reason}")
+                if not move_blocked:
+                    dist = self.config.get_distance(location, target_loc)
+                    move_cost = self.state.get_action_point_cost(role, dist)
+                    if self.state.consume_action_point(role, move_cost):
+                        # 位置绑定：嘉音/纱音移动时同步另一人
+                        if role in ("嘉音", "纱音"):
+                            self.state.bind_schrodinger_location(role, target_loc)
+                            # 移动后根据新地点自动切换主导人格
+                            anchor = self.state.auto_schrodinger_anchor_by_location(target_loc)
+                            if anchor != self.state.schrodinger_anchor:
+                                self.state.set_schrodinger_anchor(anchor)
+                                self._log_event("SYSTEM", f"薛定谔系统：进入{target_loc}，主导人格切换为 {anchor}")
+                        else:
+                            self.state.locations[role] = target_loc
+                        location = target_loc  # 更新 location，用于后续薛定谔检查
+                        await self.action_engine.broadcast_action_visibility(
+                            role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
+                        )
+                        self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
+                        # 自动获得该地点的钥匙（如果钥匙在地点里且角色没有）
+                        acquired_key = self.state.auto_acquire_room_key(role, target_loc)
+                        if acquired_key:
+                            key_name = self.state.item_registry.get(acquired_key, {}).get("name", acquired_key)
+                            await self.network.send_and_drain(seat, {
+                                "type": "notification", "title": "获得钥匙",
+                                "body": f"你发现了 {key_name}，并将其收了起来。", "severity": "info"
+                            })
+                            self._log_event("ITEM", f"{role} 在 {target_loc} 获得了 {key_name}")
                     else:
-                        self.state.locations[role] = target_loc
-                    location = target_loc  # 更新 location，用于后续薛定谔检查
-                    await self.action_engine.broadcast_action_visibility(
-                        role, f"移动到了{target_loc}", range_limit=0, exclude_role=role
-                    )
-                    self._log_event("MOVE", f"{role}: {location} -> {target_loc} (即时移动)")
-                else:
-                    await self.network.send_and_drain(seat, {
-                        "type": "notification", "title": "移动失败",
-                        "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
-                    })
+                        await self.network.send_and_drain(seat, {
+                            "type": "notification", "title": "移动失败",
+                            "body": "行动点不足或本时间槽调查次数已用尽，无法移动。", "severity": "warning"
+                        })
             else:
                 await self.network.send_and_drain(seat, {
                     "type": "notification", "title": "移动失败",

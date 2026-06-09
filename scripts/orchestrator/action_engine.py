@@ -45,6 +45,10 @@ class ParsedAction:
     shoot_target: Optional[str] = None        # 射击目标
     threaten_target: Optional[str] = None     # 威胁目标
     autopsy: bool = False                     # 验尸
+    # 钥匙与门锁
+    lock_target: Optional[str] = None         # 上锁目标地点
+    unlock_target: Optional[str] = None       # 解锁目标地点
+    use_axe_target: Optional[str] = None      # 用斧头破坏的目标地点
     # 薛定谔切换/现身
     switch_hide: bool = False                 # 切换隐藏（交换主导权）
     reveal: bool = False                      # 尝试现身
@@ -189,6 +193,20 @@ class ActionEngine:
         if any(k in text for k in ["现身", "显形", "出现", "走出来"]):
             result.reveal = True
 
+        # 钥匙与门锁操作
+        # 上锁
+        if any(k in text for k in ["上锁", "锁门", "关门锁", "锁上"]):
+            lock_match = re.search(r"(?:上锁|锁门|锁上)\s*([^。，！？、；：\s]*)", text)
+            result.lock_target = lock_match.group(1).strip() if lock_match else "current"
+        # 解锁
+        if any(k in text for k in ["开锁", "解锁", "用钥匙开", "打开锁"]):
+            unlock_match = re.search(r"(?:开锁|解锁|用钥匙开|打开锁)\s*([^。，！？、；：\s]*)", text)
+            result.unlock_target = unlock_match.group(1).strip() if unlock_match else "current"
+        # 用斧头破坏门
+        if "斧头" in text and any(k in text for k in ["劈", "砍", "破坏", "砸", "破门", "劈开"]):
+            axe_match = re.search(r"(?:劈|砍|破坏|砸|破门|劈开)\s*([^。，！？、；：\s]*)", text)
+            result.use_axe_target = axe_match.group(1).strip() if axe_match else "current"
+
         # 即时移动（支持旧格式"移动到/前往/去"和新格式"移动：/下轮移动："）
         # 注意：不解析"走向"，避免与场景描述混淆（如"走向书桌"）
         move_match = re.search(r"(?:移动[到：:]?|前往|去|下轮移动)[了：:]?\s*([^。，！？、；：\s]+)", text)
@@ -214,6 +232,9 @@ class ActionEngine:
             result.switch_hide = False
             result.reveal = False
             result.duel_beatrice = False
+            result.lock_target = None
+            result.unlock_target = None
+            result.use_axe_target = None
 
         # 大喊（<shout> XML 标签）
         shout_match = re.search(r"<shout>\s*(.+?)\s*</shout>", text, re.IGNORECASE)
@@ -576,6 +597,68 @@ class ActionEngine:
         if not dead_here:
             return f"{location} 没有尸体可以验尸。"
         return f"【验尸】你检查了 {', '.join(dead_here)} 的尸体，发现了一些线索。（需 GM 补充细节）"
+
+    # ------------------------------------------------------------------
+    # 门锁操作（Phase B 钥匙系统）
+    # ------------------------------------------------------------------
+
+    async def execute_lock(self, role: str, target: str, seat: SeatConnection) -> str:
+        """上锁：角色在当前地点（或指定地点）将门锁上。"""
+        current_loc = self.state.locations.get(role, "")
+        loc = target if target and target != "current" else current_loc
+        if not loc:
+            return "你不知道要在哪里上锁。"
+        door_config = self.config.doors.get(loc)
+        if not door_config:
+            return f"{loc} 没有可以上锁的门。"
+        state = self.state.door_states.get(loc, "unlocked")
+        if state == "locked":
+            return f"{loc} 的门已经是锁着的状态。"
+        if state == "broken":
+            return f"{loc} 的门已经被破坏，无法上锁。"
+        # 检查钥匙
+        key_item = door_config.get("key_item")
+        has_key = (key_item and self.state.has_item(role, key_item)) or self.state.has_item(role, "key:万能")
+        if not has_key:
+            return f"你没有 {loc} 的钥匙，无法上锁。"
+        self.state.door_states[loc] = "locked"
+        return f"【上锁】你用钥匙将 {loc} 的门锁上了。"
+
+    async def execute_unlock(self, role: str, target: str, seat: SeatConnection) -> str:
+        """解锁：角色在当前地点（或指定地点）将门解锁。"""
+        current_loc = self.state.locations.get(role, "")
+        loc = target if target and target != "current" else current_loc
+        if not loc:
+            return "你不知道要在哪里解锁。"
+        door_config = self.config.doors.get(loc)
+        if not door_config:
+            return f"{loc} 没有可以解锁的门。"
+        state = self.state.door_states.get(loc, "unlocked")
+        if state == "unlocked":
+            return f"{loc} 的门已经是没有上锁的状态。"
+        if state == "broken":
+            return f"{loc} 的门已经被破坏，无需解锁。"
+        # 检查钥匙
+        key_item = door_config.get("key_item")
+        has_key = (key_item and self.state.has_item(role, key_item)) or self.state.has_item(role, "key:万能")
+        if not has_key:
+            return f"你没有 {loc} 的钥匙，无法解锁。"
+        self.state.door_states[loc] = "unlocked"
+        return f"【解锁】你用钥匙将 {loc} 的门打开了。"
+
+    async def execute_use_axe(self, role: str, target: str, seat: SeatConnection) -> str:
+        """用斧头破坏门：将门永久破坏为 broken 状态。"""
+        current_loc = self.state.locations.get(role, "")
+        loc = target if target and target != "current" else current_loc
+        if not loc:
+            return "你不知道要破坏哪里的门。"
+        door_config = self.config.doors.get(loc)
+        if not door_config:
+            return f"{loc} 没有可以被破坏的门。"
+        if not self.state.has_item(role, "axe"):
+            return "你没有斧头，无法破坏门。"
+        self.state.door_states[loc] = "broken"
+        return f"【破坏】你用斧头劈开了 {loc} 的门，门已经无法再上锁。"
 
     @staticmethod
     def parse_red_truth(text: str) -> tuple[list[str], list[str]]:
