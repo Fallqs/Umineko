@@ -28,6 +28,9 @@ config/kimi_config.toml
 *.tmp
 *_temp.bat
 *_temp.sh
+start_npcs.bat
+start_npcs.sh
+shared/.npc_config.json
 
 # OS
 .DS_Store

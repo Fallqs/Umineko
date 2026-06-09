@@ -212,10 +212,19 @@ class ActionEngine:
             if leave_match:
                 result.leave_hideout = True
 
-        # 发言（提取引号内容）
+        # 发言（提取引号内容 + 发言修饰标签 <red>/<gold>/<shout>/<whisper>）
         speeches = re.findall(r'["""]([^"""]+)["""]', text)
+        tag_parts = []
+        for tag in ["red", "gold", "shout", "whisper"]:
+            tag_matches = re.findall(rf'<{tag}>(.*?)</{tag}>', text, re.IGNORECASE)
+            tag_parts.extend(tag_matches)
+
         if speeches:
             result.speech = speeches[-1]
+            if tag_parts:
+                result.speech += " " + " ".join(tag_parts)
+        elif tag_parts:
+            result.speech = " ".join(tag_parts)
         elif not result.investigate and not result.skip and not result.duel_beatrice and not result.pickup:
             # 无引号时，取最后一行作为发言（排除纯物品操作）
             lines = [l for l in text.split("\n") if l.strip()]
