@@ -26,8 +26,10 @@ class TokenRingEngine:
         self.seat_event_log = seat_event_log
         self._action_buffer: List[dict] = []
         self._action_event = asyncio.Event()
-        # 限速器：每 turn 最小间隔（秒），默认 5 秒
-        self._min_turn_interval = self._get_rule("min_turn_interval", 5.0)
+        # 限速器：每 turn 最小间隔（秒）。
+        # 计算：16角色×120turn/天=1920turn，1auto(2.5次)+15npc(1次)≈2093请求/天
+        # 要满足5h/1300次限制，总时长需≥8h，故间隔≥20秒
+        self._min_turn_interval = self._get_rule("min_turn_interval", 20.0)
         self._last_turn_time = 0.0
 
     def _get_rule(self, key: str, default=None):

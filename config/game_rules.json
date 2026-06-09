@@ -18,7 +18,7 @@
     "free_slot_rounds": 15,
     "meal_slot_rounds": 5,
     "investigations_per_slot": 4,
-    "wait_timeout": 30
+    "wait_timeout": 60
   },
   "action_ranges": {
     "speech": 0,
