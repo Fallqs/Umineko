@@ -6,7 +6,9 @@
 
 import argparse
 import asyncio
+import json
 import random
+import secrets
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -84,7 +86,8 @@ class Orchestrator:
         # 注入 buff 定义注册表（供 hook 系统使用）
         self.state.buff_registry = dict(self.config.buffs)
         self.network = NetworkLayer()
-        self.server = GameServer(host, port, self.network, msg_handler=self)
+        self.access_token = secrets.token_urlsafe(16)
+        self.server = GameServer(host, port, self.network, msg_handler=self, access_token=self.access_token)
         self.pm = ProcessManager(self.root_dir, self._normalize_python_path(python_exe), self.network)
 
         # 运行时状态（需在引擎初始化前完成）
@@ -93,6 +96,24 @@ class Orchestrator:
         self._game_start_triggered = False
         # 事件数量校验：每个 seat 已发送 notification 计数
         self.seat_event_log: Dict[str, int] = {}
+
+        # 计算预期 seats：所有玩家 seat + 所有 NPC 角色
+        self.expected_seats: Set[str] = set(self.active_seats)
+        # 从 seat chains 提取所有角色
+        all_roles: Set[str] = set()
+        for chain in self.config.seat_chains.values():
+            all_roles.update(chain)
+        all_roles.add("右代宫金藏")
+        all_roles.add("贝阿朵莉切")
+        # 已被玩家 seat 控制的角色不生成 NPC
+        controlled_by_player = set()
+        for seat_id, chain in self.config.seat_chains.items():
+            if chain:
+                controlled_by_player.add(chain[0])
+        npc_roles = all_roles - controlled_by_player
+        for role in npc_roles:
+            self.expected_seats.add(f"NPC_{role}")
+        print(f"[Orchestrator] 预期 seats: {sorted(self.expected_seats)}")
 
         # 游戏逻辑引擎
         self.time_engine = TimeEngine(self.state, callbacks=self, config=self.config)
@@ -133,6 +154,88 @@ class Orchestrator:
             return f"{drive}:\\{rest.replace('/', '\\')}"
         return path
 
+    def _write_npc_config(self) -> None:
+        """写入 NPC 启动配置文件，供 bat/sh 脚本读取。"""
+        config = {
+            "access_token": self.access_token,
+            "host": self.host,
+            "port": self.port,
+        }
+        config_path = self.root_dir / "shared" / ".npc_config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[Orchestrator] NPC 配置已写入: {config_path}")
+
+    def _generate_npc_launch_scripts(self) -> None:
+        """生成 start_npcs.bat 和 start_npcs.sh，用于外部启动所有 NPC 进程。"""
+        root = self.root_dir
+        # 计算需要启动的 NPC 角色
+        all_roles: Set[str] = set()
+        for chain in self.config.seat_chains.values():
+            all_roles.update(chain)
+        all_roles.add("右代宫金藏")
+        all_roles.add("贝阿朵莉切")
+        # 已被玩家 seat 控制的角色不生成 NPC
+        controlled_by_player = set()
+        for seat_id, chain in self.config.seat_chains.items():
+            if chain:
+                controlled_by_player.add(chain[0])
+        npc_roles = sorted(all_roles - controlled_by_player)
+
+        # Windows bat
+        bat_lines = [
+            "@echo off",
+            f"cd /d {root}",
+            "",
+            "REM 读取配置",
+            'for /f "tokens=*" %%a in (\'powershell -Command "(Get-Content shared\\.npc_config.json | ConvertFrom-Json).access_token"\') do set TOKEN=%%a',
+            'for /f "tokens=*" %%a in (\'powershell -Command "(Get-Content shared\\.npc_config.json | ConvertFrom-Json).host"\') do set HOST=%%a',
+            'for /f "tokens=*" %%a in (\'powershell -Command "(Get-Content shared\\.npc_config.json | ConvertFrom-Json).port"\') do set PORT=%%a',
+            "",
+            "REM 启动所有 NPC",
+        ]
+        for role in npc_roles:
+            safe_dir = ProcessManager._ascii_dir_name(f"NPC_{role}")
+            share_dir = root / "shared" / ".kimi" / safe_dir
+            bat_lines.append(f"setlocal")
+            bat_lines.append(f'set KIMI_SHARE_DIR={share_dir}')
+            bat_lines.append(f'set PYTHONIOENCODING=utf-8')
+            bat_lines.append(f'set PYTHONUNBUFFERED=1')
+            bat_lines.append(
+                f'start /min "" python scripts\\agent_wrapper.py '
+                f'--work-dir roles\\{role} --seat-id NPC_{role} '
+                f'--orchestrator-host %HOST% --orchestrator-port %PORT% --mode npc --yolo --access-token %TOKEN%'
+            )
+            bat_lines.append(f"endlocal")
+        bat_path = root / "start_npcs.bat"
+        bat_path.write_text("\n".join(bat_lines), encoding="utf-8")
+        print(f"[Orchestrator] 已生成: {bat_path}")
+
+        # Linux/Mac sh
+        sh_lines = [
+            "#!/bin/bash",
+            f"cd '{root}'",
+            "",
+            "# 读取配置",
+            'TOKEN=$(python3 -c "import json; print(json.load(open(\'shared/.npc_config.json\'))[\'access_token\'])")',
+            'HOST=$(python3 -c "import json; print(json.load(open(\'shared/.npc_config.json\'))[\'host\'])")',
+            'PORT=$(python3 -c "import json; print(json.load(open(\'shared/.npc_config.json\'))[\'port\'])")',
+            "",
+            "# 启动所有 NPC",
+        ]
+        for role in npc_roles:
+            safe_dir = ProcessManager._ascii_dir_name(f"NPC_{role}")
+            share_dir = root / "shared" / ".kimi" / safe_dir
+            sh_lines.append(
+                f'KIMI_SHARE_DIR="{share_dir}" python3 scripts/agent_wrapper.py '
+                f'--work-dir roles/{role} --seat-id NPC_{role} '
+                f'--orchestrator-host "$HOST" --orchestrator-port "$PORT" --mode npc --yolo --access-token "$TOKEN" &'
+            )
+        sh_lines.append("wait")
+        sh_path = root / "start_npcs.sh"
+        sh_path.write_text("\n".join(sh_lines), encoding="utf-8")
+        print(f"[Orchestrator] 已生成: {sh_path}")
+
     # ------------------------------------------------------------------
     # 对外接口（保持不变）
     # ------------------------------------------------------------------
@@ -152,7 +255,10 @@ class Orchestrator:
             self.state.locations[role] = self.location_engine.get_initial_location(role)
         # 启动NPC（mock模式下跳过，由测试脚本手动控制）
         if not self.mock_mode:
-            self.npc_engine.start_all_npcs(self.host, self.port)
+            await self.npc_engine.start_all_npcs(self.host, self.port)
+        # 生成 NPC 启动配置和脚本
+        self._write_npc_config()
+        self._generate_npc_launch_scripts()
 
     async def stop(self):
         print("[Orchestrator] Shutting down...")
@@ -266,28 +372,16 @@ class Orchestrator:
                 self.state.night_owl.discard(role)
             print(f"[Orchestrator] {seat.seat_id}({role}) 继承了状态: {inherited}")
 
-        # 检查是否满足最小seat数，触发游戏开始
+        # 全员到齐才触发游戏开始
         if not self._game_start_triggered:
-            player_seats = [
-                s for s in self.network.seats.values()
-                if s.seat_id != "BEATRICE" and not s.seat_id.startswith("NPC_")
-            ]
             registered_ids = {s.seat_id for s in self.network.seats.values()}
-            # 强制检查：必须包含战人(P1)
-            if "P1" not in registered_ids:
-                print("[Orchestrator] 等待 P1（右代宫战人）注册...")
+            missing = self.expected_seats - registered_ids
+            if missing:
+                print(f"[Orchestrator] 等待连接: {sorted(missing)}")
                 return
-            # 非 mock 模式下还必须包含贝阿朵(BEATRICE)
-            if not self.mock_mode and "BEATRICE" not in registered_ids:
-                print("[Orchestrator] 等待 BEATRICE（贝阿朵莉切）注册...")
-                return
-            if len(player_seats) >= self.min_seats:
-                self._game_start_triggered = True
-                print(f"[Orchestrator] 已注册 {len(player_seats)} 个玩家seat（含战人和贝阿朵），达到最小要求 {self.min_seats}，启动游戏循环")
-                # mock模式下外部脚本手动控制player seats，但NPC仍需自动启动
-                if self.mock_mode:
-                    self.npc_engine.start_all_npcs(self.host, self.port)
-                asyncio.create_task(self.run_game())
+            self._game_start_triggered = True
+            print(f"[Orchestrator] 所有预期 seat 已注册 ({len(registered_ids)}/{len(self.expected_seats)})，启动游戏循环")
+            asyncio.create_task(self.run_game())
 
     async def on_action(self, seat: SeatConnection, msg: dict) -> None:
         """收到seat返回的action消息。"""
@@ -1192,16 +1286,25 @@ class Orchestrator:
         expected_npcs = self.npc_engine._launched_npc_roles
         if expected_npcs:
             print(f"[Orchestrator] 等待 {len(expected_npcs)} 个NPC注册: {expected_npcs}")
-            for _ in range(60):  # 最多等待60秒
+            for i in range(300):  # 最多等待300秒
                 registered_npcs = {s.role_name for s in self.network.seats.values() if s.seat_id.startswith("NPC_")}
                 missing = expected_npcs - registered_npcs
                 if not missing:
                     print(f"[Orchestrator] 所有NPC已注册，开始游戏")
                     break
+                # 每10秒向已注册的seat发送心跳，防止_seat_reader_loop超时
+                if i > 0 and i % 10 == 0:
+                    print(f"[Orchestrator] 调试: registered_npcs={registered_npcs}, seats={list(self.network.seats.keys())}")
+                    for seat in list(self.network.seats.values()):
+                        if seat.alive:
+                            try:
+                                await self.network.send_and_drain(seat, {"type": "heartbeat", "timestamp": asyncio.get_event_loop().time()})
+                            except Exception:
+                                pass
                 await asyncio.sleep(1)
             else:
                 missing = expected_npcs - {s.role_name for s in self.network.seats.values() if s.seat_id.startswith("NPC_")}
-                print(f"[Orchestrator] 警告：以下NPC未在60秒内注册: {missing}，继续游戏")
+                print(f"[Orchestrator] 警告：以下NPC未在300秒内注册: {missing}，继续游戏")
         while self.state.day <= self.max_day and not self._stop_requested:
             if not any(s.alive for s in self.network.seats.values() if s.seat_id != "BEATRICE" and not s.seat_id.startswith("NPC_")):
                 print("[Orchestrator] 无存活玩家seat，游戏结束。")

@@ -4,6 +4,7 @@
 管理NPC进程的启动、回收、状态转移。
 """
 
+import asyncio
 from typing import Optional, Set
 
 from .config_loader import ConfigLoader
@@ -41,8 +42,8 @@ class NPCEngine:
         npc_roles = all_roles - controlled_roles - self.state.dead_roles
         return npc_roles
 
-    def start_all_npcs(self, host: str, port: int) -> None:
-        """启动所有未被玩家控制的角色的NPC进程。"""
+    async def start_all_npcs(self, host: str, port: int) -> None:
+        """初始化所有未被玩家控制的角色的NPC状态（不再spawn进程，由外部bat/sh启动）。"""
         npc_roles = self.get_npc_roles()
         self._launched_npc_roles = set()
         for role in npc_roles:
@@ -54,9 +55,8 @@ class NPCEngine:
                 self.state.alive_roles.add(role)
                 if role not in self.state.action_points:
                     self.state.action_points[role] = 50
-                self.pm.start_npc(role, host, port)
                 self._launched_npc_roles.add(role)
-                print(f"[NPCEngine] 启动NPC: {role} -> {seat_id}")
+                print(f"[NPCEngine] 初始化NPC状态: {role} -> {seat_id}")
 
     def terminate_npc(self, role_name: str) -> None:
         seat_id = f"NPC_{role_name}"

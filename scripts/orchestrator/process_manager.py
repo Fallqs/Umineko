@@ -58,6 +58,17 @@ class ProcessManager:
             return f"{drive}:\\{rest.replace('/', '\\')}"
         return path
 
+    @staticmethod
+    def _ascii_dir_name(seat_id: str) -> str:
+        """将 seat_id 中的非 ASCII 字符编码为 _uXXXX，确保 Windows 环境变量传递时不乱码。"""
+        parts = []
+        for ch in seat_id:
+            if ord(ch) < 128:
+                parts.append(ch)
+            else:
+                parts.append(f"_u{ord(ch):04x}")
+        return "".join(parts)
+
     def start_seat(self, seat_id: str, role_name: str, agent_mode: str, host: str, port: int) -> None:
         role_dir = self.root_dir / "roles" / role_name
         wrapper = self.root_dir / "scripts" / "agent_wrapper.py"
@@ -81,6 +92,12 @@ class ProcessManager:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
+        # 为每个 seat 分配独立的 KIMI_SHARE_DIR，避免多个进程同时写 ~/.kimi/kimi.json 和 ~/.kimi/logs/kimi.log 导致冲突
+        # Windows subprocess.Popen 传递中文环境变量会乱码，因此目录名使用 ASCII 编码版本
+        safe_dir = self._ascii_dir_name(seat_id)
+        kimi_share_dir = self.root_dir / "shared" / ".kimi" / safe_dir
+        kimi_share_dir.mkdir(parents=True, exist_ok=True)
+        env["KIMI_SHARE_DIR"] = str(kimi_share_dir)
         proc = subprocess.Popen(
             cmd,
             stdout=open(log_file, "w", encoding="utf-8", buffering=1),

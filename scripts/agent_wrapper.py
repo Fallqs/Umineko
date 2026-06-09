@@ -267,6 +267,7 @@ class SeatAgent:
         yolo: bool = True,
         thinking: bool = False,
         model_name: Optional[str] = None,
+        access_token: str = "",
     ):
         self.role_dir = role_dir
         self.seat_id = seat_id
@@ -276,6 +277,7 @@ class SeatAgent:
         self.yolo = yolo
         self.thinking = thinking
         self.model_name = model_name
+        self.access_token = access_token
 
         # 队列
         self.gm_input_queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -353,6 +355,7 @@ class SeatAgent:
             "type": "register",
             "seat_id": self.seat_id,
             "role_name": self.role_dir.name,
+            "access_token": self.access_token,
         }
         self._send_to_orchestrator(register_msg)
         print(f"[Agent] Connected to orchestrator as {self.seat_id}")
@@ -483,6 +486,8 @@ class SeatAgent:
             await self._handle_beatrice_flashback(msg)
         elif msg_type == "register_ok":
             print(f"[Agent] [{self.seat_id}] Registered with orchestrator")
+        elif msg_type == "heartbeat":
+            pass  # 心跳消息，忽略
         else:
             print(f"[Agent] [{self.seat_id}] Unknown message type: {msg_type}")
 
@@ -770,6 +775,7 @@ class SeatAgent:
         else:
             investigate_desc = "- 调查（本时间槽次数已用尽，本轮无法调查）"
 
+        situation = msg.get("situation", "")
         prompt = self.prompt_loader.load_or_fallback(
             "player_turn",
             f"【轮到你的回合】\n"
@@ -796,6 +802,7 @@ class SeatAgent:
             inventory=inventory_str,
             buffer_events=buffer_text,
             investigate_desc=investigate_desc,
+            situation=situation,
         )
 
         # 贝阿朵莉切特殊能力
@@ -1311,6 +1318,7 @@ def main() -> None:
     parser.add_argument("--no-yolo", dest="yolo", action="store_false")
     parser.add_argument("--thinking", action="store_true", default=False)
     parser.add_argument("--model", type=str, default=None)
+    parser.add_argument("--access-token", type=str, default="", help="Access token for orchestrator handshake")
     args = parser.parse_args()
 
     agent = SeatAgent(
@@ -1322,6 +1330,7 @@ def main() -> None:
         yolo=args.yolo,
         thinking=args.thinking,
         model_name=args.model,
+        access_token=args.access_token,
     )
 
     asyncio.run(agent.init_and_run())

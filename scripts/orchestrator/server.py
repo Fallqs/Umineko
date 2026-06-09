@@ -24,17 +24,18 @@ class MessageHandler(Protocol):
 
 
 class GameServer:
-    def __init__(self, host: str, port: int, network: NetworkLayer, msg_handler: MessageHandler):
+    def __init__(self, host: str, port: int, network: NetworkLayer, msg_handler: MessageHandler, access_token: Optional[str] = None):
         self.host = host
         self.port = port
         self.network = network
         self.msg_handler = msg_handler
+        self.access_token = access_token
         self.server: Optional[asyncio.Server] = None
         self._shutdown_event = asyncio.Event()
         self._handler_tasks: set = set()
 
     async def start(self) -> None:
-        self.server = await asyncio.start_server(self._handle_client, self.host, self.port)
+        self.server = await asyncio.start_server(self._handle_client, self.host, self.port, reuse_address=True)
         addrs = ", ".join(str(sock.getsockname()) for sock in self.server.sockets)
         print(f"[GameServer] TCP server serving on {addrs}")
 
@@ -91,6 +92,21 @@ class GameServer:
                 writer.close()
                 await writer.wait_closed()
                 return
+
+            # access_token 验证
+            if self.access_token is not None:
+                token = msg.get("access_token", "")
+                if token != self.access_token:
+                    print(f"[GameServer] Invalid access_token from {msg.get('seat_id', '?')}, closing")
+                    try:
+                        data = json.dumps({"type": "register_denied", "reason": "invalid token"}) + "\n"
+                        writer.write(data.encode("utf-8"))
+                        await writer.drain()
+                    except Exception:
+                        pass
+                    writer.close()
+                    await writer.wait_closed()
+                    return
 
             seat_id = msg.get("seat_id", "")
             role_name = msg.get("role_name", "")
@@ -149,7 +165,7 @@ class GameServer:
             while seat.alive and not seat.reader.at_eof():
                 try:
                     # 延长超时以容纳 agent 处理 turn_token 所需的 LLM 推理时间
-                    line = await asyncio.wait_for(seat.reader.readline(), timeout=60.0)
+                    line = await asyncio.wait_for(seat.reader.readline(), timeout=300.0)
                 except asyncio.TimeoutError:
                     break
                 if not line:
