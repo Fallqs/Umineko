@@ -1213,7 +1213,16 @@ class SeatAgent:
                 msg_id = msg.get("id", "")
                 buffer_text = msg.get("buffer_text", "")
                 if buffer_text and buffer_text != "（无新事件）":
-                    print(f"[Agent] [USER] Buffer ({msg_id}): {buffer_text[:200]}...")
+                    # 提取标题列表 + 完整内容前500字符
+                    titles = []
+                    for line in buffer_text.split("\n"):
+                        if line.startswith("- ["):
+                            end = line.find("]", 3)
+                            if end > 0:
+                                titles.append(line[3:end])
+                    title_summary = ", ".join(titles) if titles else "(无标题)"
+                    print(f"[Agent] [USER] Buffer-titles ({msg_id}): {title_summary}")
+                    print(f"[Agent] [USER] Buffer ({msg_id}): {buffer_text[:500]}...")
                 print(f"[Agent] [USER] Input ({msg_id}): {text[:120]}...")
 
                 success = False
