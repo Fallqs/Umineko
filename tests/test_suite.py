@@ -13,13 +13,13 @@ import sys
 import traceback
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator.config_loader import ConfigLoader
-from orchestrator.state import GameState
-from orchestrator.action_engine import ActionEngine, ParsedAction
-from orchestrator.core import Orchestrator
-from orchestrator.network import NetworkLayer, SeatConnection
+from scripts.orchestrator.config_loader import ConfigLoader
+from scripts.orchestrator.state import GameState
+from scripts.orchestrator.action_engine import ActionEngine, ParsedAction
+from scripts.orchestrator.core import Orchestrator
+from scripts.orchestrator.network import NetworkLayer, SeatConnection
 
 
 # ---------------------------------------------------------------------------

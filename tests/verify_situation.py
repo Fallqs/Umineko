@@ -11,8 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from orchestrator.core import Orchestrator
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.orchestrator.core import Orchestrator
 
 
 async def mock_client(seat_id: str, role_name: str, host: str, port: int):
