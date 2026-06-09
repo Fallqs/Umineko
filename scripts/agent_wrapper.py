@@ -314,7 +314,13 @@ class SeatAgent:
 
         config: Optional[Config] = None
         try:
-            config = load_config()
+            # 优先使用项目根目录的 config/kimi_config.toml（避免每个开发者暴露自己的 ~/.kimi/config.toml）
+            project_root = self.role_dir.parent.parent
+            custom_config = project_root / "config" / "kimi_config.toml"
+            if custom_config.exists():
+                config = load_config(config_file=custom_config)
+            else:
+                config = load_config()
         except Exception:
             pass
 

@@ -21,6 +21,9 @@ shared/inbox/outbox/
 shared/*.json
 shared/*.log
 
+# API keys (project-local config, should not be committed)
+config/kimi_config.toml
+
 # Temp files
 *.tmp
 *_temp.bat
