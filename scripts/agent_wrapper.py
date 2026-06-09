@@ -305,6 +305,7 @@ class SeatAgent:
 
         self._running = True
         self._spectator = False
+        self.beatrice_flashbacks: list[str] = []
 
     async def init(self):
         enable_logging(debug=False, redirect_stderr=False)
@@ -478,6 +479,8 @@ class SeatAgent:
             await self._handle_schrodinger_judgment(msg)
         elif msg_type == "player_input":
             await self._handle_player_input(msg)
+        elif msg_type == "beatrice_flashback":
+            await self._handle_beatrice_flashback(msg)
         elif msg_type == "register_ok":
             print(f"[Agent] [{self.seat_id}] Registered with orchestrator")
         else:
@@ -810,12 +813,26 @@ class SeatAgent:
                 "4. 对其他角色使用带有距离感的称呼，不要显得过于亲近。"
                 "5. 行动应当带有超自然色彩或象征意义，而非普通的调查/移动。"
                 "\n"
+                "【记忆碎片】"
+                "你拥有一些模糊的记忆碎片，但它们并不完整。"
+                "每当玩家在游戏中发现关键线索时，你可能会\"回忆起\"更多关于自己的真相。"
+                "你对纱音和嘉音有一种说不清的亲切感，但你不知道原因。"
+                "\n"
+                "【你的动力】"
+                "1. 你渴望找回完整的记忆——你知道自己失去了什么重要的东西。"
+                "2. 你会用红字和谜语引导玩家去调查特定地点，因为玩家的发现会触发你的记忆。"
+                "3. 当你\"回忆\"起新内容时，你的行为应当微妙地改变——但你不会直接告诉任何人你回忆起了什么。"
+                "\n"
                 "【示例口吻】"
                 '- "人类的智慧真是渺小呢。不过，我喜欢看你们挣扎的样子。"'
                 '- "契约已经缔结。接下来的命运，谁也改变不了——<red>包括我自己</red>。"'
                 '- "去吧，去追寻你想要的真相。但记住，<gold>没有爱，就看不见。</gold>"',
             )
             prompt = prompt + "\n" + special_text
+            # 注入已收集的闪回记忆
+            if self.beatrice_flashbacks:
+                memory_text = "\n\n【闪回记忆】\n" + "\n---\n".join(self.beatrice_flashbacks)
+                prompt = prompt + memory_text
 
         # auto / beatrice 模式：交给 User Session（_user_loop 会处理解析、审查、预解析）
         if self.mode in ("auto", "beatrice") and self.user:
@@ -1064,6 +1081,14 @@ class SeatAgent:
             except Exception as e:
                 print(f"[Agent] [{self.seat_id}] Failed to update GM with inherited state: {e}")
         print(f"[Agent] [{self.seat_id}] Inherited state for {role}: ap={state.get('action_points')}, loc={state.get('location')}")
+
+    async def _handle_beatrice_flashback(self, msg: dict):
+        """处理贝阿朵闪回记忆注入。"""
+        ch_id = msg.get("chapter_id", "unknown")
+        ch_title = msg.get("chapter_title", "")
+        flashback_text = msg.get("content", "")
+        self.beatrice_flashbacks.append(flashback_text)
+        print(f"[Agent] [贝阿朵] 收到闪回记忆: {ch_id} - {ch_title}")
 
     async def _handle_schrodinger_judgment(self, msg: dict):
         """贝阿朵模式：对薛定谔违规进行裁决，带格式验证和同 Session 内重试修正。"""

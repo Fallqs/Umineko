@@ -24,6 +24,7 @@ if sys.platform == "win32":
 from .action_context import ActionContext
 from .action_engine import ActionEngine, ParsedAction
 from .beatrice_engine import BeatriceEngine
+from .beatrice_flashback_engine import BeatriceFlashbackEngine
 from .config_loader import ConfigLoader
 from .death_engine import DeathEngine
 from .location_engine import LocationEngine
@@ -102,6 +103,7 @@ class Orchestrator:
         self.npc_engine = NPCEngine(self.state, self.pm, config=self.config)
         self.death_engine = DeathEngine(self.state, self.pm, self.network, config=self.config, log_callback=self._log_event)
         self.beatrice_engine = BeatriceEngine(self.state, self.network)
+        self.beatrice_flashback_engine = BeatriceFlashbackEngine(self.root_dir)
 
         # 叙事日志文件
         self._log_file = self.root_dir / "shared" / "logs" / "narrative.log"
@@ -352,6 +354,7 @@ class Orchestrator:
             await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
         self._log_event("SYSTEM", f"行动点重置为26，存活: {sorted(self.state.alive_roles)}")
         print(f"[Orchestrator] DAWN 完成，行动点已重置为26")
+        await self._check_and_send_beatrice_flashbacks("DAWN")
 
     async def on_free_slot(self, slot: str) -> None:
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
@@ -361,6 +364,7 @@ class Orchestrator:
             return
         self.state.reset_investigations()
         await self.token_ring.run(active_roles, slot)
+        await self._check_and_send_beatrice_flashbacks(slot)
 
     async def on_meal_slot(self, slot: str) -> None:
         meal_name = {"BREAKFAST": "早饭", "LUNCH": "午饭", "DINNER": "晚饭"}.get(slot, slot)
@@ -373,6 +377,7 @@ class Orchestrator:
         self.state.reset_investigations()
         if active_roles:
             await self.token_ring.run(active_roles, slot)
+        await self._check_and_send_beatrice_flashbacks(slot)
         await self._broadcast_notification(f"{meal_name}结束", f"{meal_name}结束了。", severity="info")
 
     async def on_sleep_check(self) -> None:
@@ -1076,6 +1081,33 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # 广播与通知
     # ------------------------------------------------------------------
+
+    async def _check_and_send_beatrice_flashbacks(self, slot: str):
+        """检查并发送贝阿朵闪回记忆（时间槽边界批量触发）。"""
+        if not hasattr(self, 'beatrice_flashback_engine'):
+            return
+        flashbacks = self.beatrice_flashback_engine.check_new_unlocks(self.state)
+        for fb in flashbacks:
+            self.state.beatrice_flashback_history.append(fb["chapter_id"])
+            await self._send_beatrice_flashback(fb, slot)
+
+    async def _send_beatrice_flashback(self, flashback: dict, slot: str):
+        """通过私有消息将闪回发送给贝阿朵NPC进程。"""
+        for seat_id, seat in self.network.seats.items():
+            if seat.alive and seat.role_name == "贝阿朵莉切":
+                try:
+                    await self.network.send_and_drain(seat, {
+                        "type": "beatrice_flashback",
+                        "chapter_id": flashback["chapter_id"],
+                        "chapter_title": flashback["chapter_title"],
+                        "content": flashback["content"],
+                        "unlocked_at_slot": slot,
+                        "day": flashback["day"],
+                    })
+                    print(f"[Orchestrator] 闪回已发送给贝阿朵: {flashback['chapter_id']} ({flashback['chapter_title']})")
+                except Exception as e:
+                    print(f"[Orchestrator] 发送闪回失败: {e}")
+                return
 
     async def _broadcast_notification(self, title: str, body: str, severity: str = "info", exclude: Optional[Set[str]] = None):
         exclude = exclude or set()

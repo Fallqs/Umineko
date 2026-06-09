@@ -1,0 +1,40 @@
+{
+  "chapters": {
+    "L0": {
+      "description": "黄金魔女表层设定",
+      "requires_info": [],
+      "requires_day": 0
+    },
+    "L1": {
+      "description": "魔女传说与三代传承",
+      "requires_info": ["P-07"],
+      "requires_day": 1
+    },
+    "L2": {
+      "description": "右代宫家恩怨与黄金乡",
+      "requires_info": ["S-金藏日记"],
+      "requires_day": 2
+    },
+    "L3": {
+      "description": "容器与守护者",
+      "requires_info": ["C-15"],
+      "requires_day": 3
+    },
+    "L4": {
+      "description": "同一人的双重人格",
+      "requires_info": ["C-14"],
+      "requires_day": 4
+    },
+    "L5": {
+      "description": "真名：安田纱代",
+      "requires_info": ["C-12"],
+      "requires_day": 5
+    },
+    "L6": {
+      "description": "隐藏结局：家族关系",
+      "requires_info": [],
+      "requires_day": 7
+    }
+  },
+  "check_interval": "slot_end"
+}

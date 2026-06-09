@@ -47,6 +47,9 @@ class GameState:
     # 信息解锁
     unlocked_info: Dict[str, Set[str]] = field(default_factory=dict)
 
+    # 贝阿朵闪回历史：记录已发送给贝阿朵的闪回章节ID
+    beatrice_flashback_history: List[str] = field(default_factory=list)
+
     # 角色控制映射：role_name -> seat_id（"P1" 或 "NPC_xxx"）
     role_controller: Dict[str, str] = field(default_factory=dict)
 
