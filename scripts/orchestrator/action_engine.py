@@ -189,10 +189,31 @@ class ActionEngine:
         if any(k in text for k in ["现身", "显形", "出现", "走出来"]):
             result.reveal = True
 
-        # 即时移动（支持旧格式"移动到/前往/去/走向"和新格式"下轮移动："）
-        move_match = re.search(r"(?:移动到|前往|去|走向|下轮移动)[了：:]?\s*([^。，！？、；：\s]+)", text)
+        # 即时移动（支持旧格式"移动到/前往/去"和新格式"移动：/下轮移动："）
+        # 注意：不解析"走向"，避免与场景描述混淆（如"走向书桌"）
+        move_match = re.search(r"(?:移动[到：:]?|前往|去|下轮移动)[了：:]?\s*([^。，！？、；：\s]+)", text)
         if move_match:
             result.move_target = move_match.group(1).strip()
+
+        # 移动与其他主要行动互斥：若本回合选择移动，则清除其他主要行动（保留发言）
+        if result.move_target:
+            result.investigate = False
+            result.investigate_target = None
+            result.autopsy = False
+            result.search_target = None
+            result.pickup = False
+            result.drop = False
+            result.drop_item = None
+            result.gift_target = None
+            result.gift_item = None
+            result.toggle_visibility_item = None
+            result.open_container = None
+            result.close_container = None
+            result.hide_in = None
+            result.leave_hideout = False
+            result.switch_hide = False
+            result.reveal = False
+            result.duel_beatrice = False
 
         # 大喊（<shout> XML 标签）
         shout_match = re.search(r"<shout>\s*(.+?)\s*</shout>", text, re.IGNORECASE)

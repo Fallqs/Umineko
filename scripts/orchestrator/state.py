@@ -281,7 +281,8 @@ class GameState:
         return role in self.alive_roles and role not in self.dead_roles
 
     def mark_dead(self, role: str) -> int:
-        if role in self.dead_roles:
+        corpse_id = f"corpse:{role}"
+        if corpse_id in self.item_registry:
             return self.settled_role_scores.get(role, 0)
         self.dead_roles.add(role)
         self.alive_roles.discard(role)
@@ -633,12 +634,15 @@ class GameState:
         lines.append("1. 发言（每轮都可以，同地点所有人能听到，消耗0行动点）")
         if investigations_remaining > 0:
             cost = self.get_action_point_cost(role, 2)
-            lines.append(f"2. 调查/移动/互动（消耗{cost}点行动点，占用1次调查机会，本时间槽剩余 {investigations_remaining} 次机会）")
-            lines.append("   包括：调查地点或人物、移动到相邻地点、拾取物品、搜身、安慰、开枪等")
+            lines.append(f"2. 调查/互动（消耗{cost}点行动点，占用1次调查机会，本时间槽剩余 {investigations_remaining} 次机会）")
+            lines.append("   包括：调查地点或人物、拾取物品、搜身、安慰、开枪等")
         else:
-            lines.append("2. 调查/移动/互动（本时间槽次数已用尽，本轮无法执行）")
-        lines.append("3. 跳过回合")
-        lines.append("4. 丢弃物品（将背包中的物品丢在当前地点，消耗0行动点）")
+            lines.append("2. 调查/互动（本时间槽次数已用尽，本轮无法执行）")
+        # 移动作为独立选项，与调查互斥
+        move_cost = self.get_action_point_cost(role, 1)
+        lines.append(f"3. 移动（消耗{move_cost}点行动点，立即生效。选择移动后本回合不能再调查或互动）")
+        lines.append("4. 跳过回合")
+        lines.append("5. 丢弃物品（将背包中的物品丢在当前地点，消耗0行动点）")
 
         # 藏匿点信息
         role_loc = self.locations.get(role, "本馆")

@@ -261,6 +261,12 @@ class Orchestrator:
         # 初始化角色位置
         for role in self.state.alive_roles:
             self.state.locations[role] = self.location_engine.get_initial_location(role)
+        # 处理初始死亡角色（游戏开始前已死亡）：设置位置并生成尸体
+        for role in self.config.game_rules.get("initial_dead_roles", []):
+            if role not in self.state.locations:
+                self.state.locations[role] = self.location_engine.get_initial_location(role)
+            self.state.mark_dead(role)
+            self._log_event("SYSTEM", f"初始死亡角色 {role} 已处理，尸体在 {self.state.locations[role]}")
         # 启动NPC（mock模式下跳过，由测试脚本手动控制）
         if not self.mock_mode:
             await self.npc_engine.start_all_npcs(self.host, self.port)
@@ -439,6 +445,17 @@ class Orchestrator:
                 await self.death_engine.handle_death(role, cause)
             death_text = "\n".join([f"☠️ {r}: {c}" for r, c in deaths])
             await self._broadcast_notification("清晨事件", f"发现了新的死亡：\n{death_text}", severity="error")
+        # Day1 广播初始死亡角色的尸体发现
+        if self.state.day == 1:
+            initial_dead = self.config.game_rules.get("initial_dead_roles", [])
+            for role in initial_dead:
+                if role in self.state.dead_roles:
+                    location = self.state.locations.get(role, "未知")
+                    await self._broadcast_notification(
+                        "清晨发现",
+                        f"清晨，有人在{location}发现了{role}的尸体。",
+                        severity="error",
+                    )
         for role in list(self.state.alive_roles):
             self.state.locations[role] = "本馆"
         # 薛定谔系统：位置绑定 + 自动隐藏
@@ -975,7 +992,7 @@ class Orchestrator:
             if target_loc in self.config.locations:
                 dist = self.config.get_distance(location, target_loc)
                 move_cost = self.state.get_action_point_cost(role, dist)
-                if self.state.consume_action_point(role, move_cost) and self.state.use_investigation(role):
+                if self.state.consume_action_point(role, move_cost):
                     # 位置绑定：嘉音/纱音移动时同步另一人
                     if role in ("嘉音", "纱音"):
                         self.state.bind_schrodinger_location(role, target_loc)

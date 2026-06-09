@@ -40,19 +40,28 @@ class TokenRingEngine:
     def _build_situation(self, role: str, slot: str) -> str:
         """根据游戏状态动态生成角色处境描述。"""
         day = self.state.day
-        has_deaths = bool(self.state.dead_roles)
+        # 区分初始死亡（游戏开始前已死亡）与游戏中死亡
+        initial_dead = set(self.config.game_rules.get("initial_dead_roles", []) if self.config else [])
+        game_deaths = self.state.dead_roles - initial_dead
+        has_game_deaths = bool(game_deaths)
+        has_initial_deaths = bool(initial_dead & self.state.dead_roles)
         is_beatrice = role == "贝阿朵莉切"
 
         if is_beatrice:
-            if has_deaths:
+            if has_game_deaths:
                 return "棋盘上的棋子开始倒下了。他们开始害怕，但还不够——人类的挣扎才刚刚开始有趣。让他们再走近一点真相吧。"
+            elif has_initial_deaths:
+                return "棋盘上已经缺少了一枚棋子。他们还没发现，但很快就会了。人类的迟钝总是让我发笑。"
             else:
                 return "棋盘已经铺好，棋子们还不知道游戏的规则。让他们享受最后的安宁吧。"
 
-        if day == 1 and not has_deaths:
-            return "你踏上六轩岛，参加家族聚会。天空阴云密布，海风带着咸涩的潮湿。一切看起来只是寻常的不和，但你的直觉告诉你——有什么东西正在暗处注视。"
+        if day == 1 and not has_game_deaths:
+            if has_initial_deaths:
+                return "你踏上六轩岛，参加家族聚会。天空阴云密布，海风带着咸涩的潮湿。家族的气氛比往常更加紧张——金藏老爷今天没有出现在早餐桌上，管家说他还在休息，但没有人真正见过他。一切看起来只是寻常的不和，但你的直觉告诉你——有什么东西正在暗处注视。"
+            else:
+                return "你踏上六轩岛，参加家族聚会。天空阴云密布，海风带着咸涩的潮湿。一切看起来只是寻常的不和，但你的直觉告诉你——有什么东西正在暗处注视。"
 
-        if has_deaths:
+        if has_game_deaths:
             return "杀戮的漩涡正悄然转动。有人死去，有人将死，你也不例外。你感到血液在耳中轰鸣——请竭力阻止或逃离这场亲人间的屠杀。"
 
         return "又一天开始了。尸体已经冰冷，但凶手仍在某处呼吸。你能信任谁？你能拯救谁？"
@@ -294,15 +303,19 @@ class TokenRingEngine:
         parts.append("")
         parts.append("【重要：输出格式要求】")
         parts.append("请用简洁的自然语言描述你的行动（200字以内），不要写小说式的心理描写、环境渲染或长篇对话。")
+        parts.append("【规则】每回合你只能选择 [一个] 行动选项执行，不能组合。")
+        parts.append("  - 调查、验尸、移动、使用物品、专属行动——这些是互斥的，一次只能选其一。")
+        parts.append("  - 发言可以与行动同时出现（免费，不消耗行动点），但行动本身只能有一个。")
+        parts.append("  - 如果你既想调查又想移动，请分两次行动：本轮移动，下轮调查。")
         parts.append("你的输出应只包含：")
-        parts.append("1. 你做了什么（调查、移动、使用物品等）")
-        parts.append("2. 如有发言，直接写出说的话（控制在2-3句以内）")
-        parts.append('3. 如有移动意图，在末尾声明："下轮移动：{地点名}"')
+        parts.append("1. 你做的那 [一个] 行动（调查、移动、使用物品、验尸等）")
+        parts.append("2. 如有发言，直接写出说的话，通常你的发言能被在场所有人听到")
+        parts.append('ps: 如果你选择移动，直接写："移动：{地点名}"（移动会立即生效，本回合不能再做其他事）')
         parts.append("")
         parts.append("示例：")
-        parts.append('"我调查了书桌抽屉，发现了一盘录音带。下轮移动：书房"')
-        parts.append('"纱音，你昨晚睡得好吗？下轮移动：餐厅"')
-        parts.append('"我走向中庭花园，看看玫瑰开得怎样。"')
+        parts.append('"我调查了书桌抽屉，发现了一盘录音带。"')
+        parts.append('"纱音，你昨晚睡得好吗？"')
+        parts.append('"移动：书房"')
         return "\n".join(parts)
 
     async def _wait_for_action(self, seat: SeatConnection, parent_id: str, timeout: float = 180.0) -> Optional[dict]:
