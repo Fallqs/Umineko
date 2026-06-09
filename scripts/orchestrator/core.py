@@ -34,6 +34,7 @@ from .meta_engine import MetaActionEngine, ActionResult
 from .network import NetworkLayer, SeatConnection
 from .npc_engine import NPCEngine
 from .process_manager import ProcessManager
+from .quest_engine import QuestEngine
 from .server import GameServer
 from .state import GameState
 from .time_engine import TimeEngine
@@ -95,6 +96,7 @@ class Orchestrator:
         self.access_token = secrets.token_urlsafe(16)
         self.server = GameServer(host, port, self.network, msg_handler=self, access_token=self.access_token)
         self.pm = ProcessManager(self.root_dir, self._normalize_python_path(python_exe), self.network)
+        self.quest_engine = QuestEngine(self.state, self.config, self.network)
 
         # 运行时状态（需在引擎初始化前完成）
         self.narrative_log: List[str] = []
@@ -131,6 +133,7 @@ class Orchestrator:
         self.time_engine = TimeEngine(self.state, callbacks=self, config=self.config)
         self.location_engine = LocationEngine(self.state, self.config)
         self.token_ring = TokenRingEngine(self.state, self.network, callbacks=self, config=self.config, seat_event_log=self.seat_event_log)
+        self.token_ring.quest_engine = self.quest_engine
         self.action_engine = ActionEngine(self.state, self.config, self.network)
         self.meta_engine = MetaActionEngine(self.state, self.network, self.config)
         self.npc_engine = NPCEngine(self.state, self.pm, config=self.config)
@@ -463,35 +466,48 @@ class Orchestrator:
                         severity="error",
                     )
         for role in list(self.state.alive_roles):
-            self.state.locations[role] = "本馆"
+            if self.state.day == 1:
+                room = self.config.role_rooms.get(role, "本馆")
+                self.state.locations[role] = room
+            else:
+                self.state.locations[role] = "本馆"
         # 薛定谔系统：位置绑定 + 自动隐藏
         if "嘉音" in self.state.alive_roles and "纱音" in self.state.alive_roles:
             # 确保两人位置同步
-            self.state.bind_schrodinger_location("嘉音", "本馆")
+            schro_loc = self.config.role_rooms.get("嘉音", "佣人房") if self.state.day == 1 else "本馆"
+            self.state.bind_schrodinger_location("嘉音", schro_loc)
             # 初始化共享背包
             self.location_engine.init_schrodinger_shared_inventory()
             # 根据地点自动设置主导人格
-            anchor = self.state.auto_schrodinger_anchor_by_location("本馆")
+            anchor = self.state.auto_schrodinger_anchor_by_location(schro_loc)
             self.state.set_schrodinger_anchor(anchor)
             self._log_event("SYSTEM", f"薛定谔系统：嘉音与纱音位置绑定，主导人格设为 {anchor}")
             print(f"[Orchestrator] 薛定谔系统：主导人格 {anchor}")
         if not deaths:
-            await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
+            if self.state.day == 1:
+                await self._broadcast_notification("上岛", "你已经抵达六轩岛，各自回到房间。", severity="info")
+            else:
+                await self._broadcast_notification("清晨", "新的一天开始了。所有人被自动移动到本馆。", severity="info")
         self._log_event("SYSTEM", f"行动点重置为26，存活: {sorted(self.state.alive_roles)}")
         print(f"[Orchestrator] DAWN 完成，行动点已重置为26")
+        self.quest_engine.check_triggers("DAWN", self.state.day)
         await self._check_and_send_beatrice_flashbacks("DAWN")
 
     async def on_free_slot(self, slot: str) -> None:
+        self.quest_engine.check_triggers(slot, self.state.day)
         active_roles = [r for r in self.state.alive_roles if r not in self.state.sleeping]
         if not active_roles:
             print(f"[Orchestrator] {slot}: 无活跃角色，跳过")
             self._log_event("SYSTEM", f"{slot}: 无活跃角色，跳过")
+            self.quest_engine.check_timeouts(slot, self.state.day)
             return
         self.state.reset_investigations()
         await self.token_ring.run(active_roles, slot)
+        self.quest_engine.check_timeouts(slot, self.state.day)
         await self._check_and_send_beatrice_flashbacks(slot)
 
     async def on_meal_slot(self, slot: str) -> None:
+        self.quest_engine.check_triggers(slot, self.state.day)
         meal_name = {"BREAKFAST": "早饭", "LUNCH": "午饭", "DINNER": "晚饭"}.get(slot, slot)
         print(f"[Orchestrator] 🍽️ {slot}: {meal_name}时间，强制回本馆...")
         self._log_event("SYSTEM", f"{slot} {meal_name}时间，强制移动到餐厅")
@@ -502,6 +518,7 @@ class Orchestrator:
         self.state.reset_investigations()
         if active_roles:
             await self.token_ring.run(active_roles, slot)
+        self.quest_engine.check_timeouts(slot, self.state.day)
         await self._check_and_send_beatrice_flashbacks(slot)
         await self._broadcast_notification(f"{meal_name}结束", f"{meal_name}结束了。", severity="info")
 
@@ -1015,6 +1032,7 @@ class Orchestrator:
         if parsed.speech:
             await self.action_engine.broadcast_speech(role, parsed.speech, range_limit=0)
             self._log_event("SPEECH", f'{role} (@{location}): "{parsed.speech}"')
+            self.quest_engine.check_completion(role, "broadcast_speech", speech=parsed.speech)
 
         # 大喊（始终可叠加，range=1）
         if parsed.shout_text:
@@ -1067,6 +1085,8 @@ class Orchestrator:
                                 "body": f"你发现了 {key_name}，并将其收了起来。", "severity": "info"
                             })
                             self._log_event("ITEM", f"{role} 在 {target_loc} 获得了 {key_name}")
+                        # 检查任务完成
+                        self.quest_engine.check_completion(role, "move_to")
                     else:
                         await self.network.send_and_drain(seat, {
                             "type": "notification", "title": "移动失败",

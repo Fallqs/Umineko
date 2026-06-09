@@ -76,6 +76,11 @@ class TimeEngine:
         meal_slots = self._get_meal_slots()
         special_slots = self._get_special_slots()
 
+        # Day1 快速开始：跳过上午时间槽
+        if getattr(self.state, "day", 1) == 1:
+            skip = {"MORNING", "BREAKFAST", "NOON", "LUNCH"}
+            time_slots = [s for s in time_slots if s not in skip]
+
         for slot in time_slots:
             if getattr(self.state, "_stop_requested", False):
                 break

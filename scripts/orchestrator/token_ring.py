@@ -215,6 +215,12 @@ class TokenRingEngine:
         else:
             parts.append("你的背包是空的。")
 
+        # 活跃任务提示
+        if hasattr(self, 'quest_engine') and self.quest_engine:
+            quest_prompts = self.quest_engine.get_active_quest_prompts(role)
+            for qp in quest_prompts:
+                parts.append(f"【任务】{qp}")
+
         # 地点可见物品
         visible_item_descs = []
         for item_id, loc in self.state.item_locations.items():

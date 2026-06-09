@@ -1,0 +1,90 @@
+{
+  "role_rooms": {
+    "右代宫藏臼": "主卧",
+    "右代宫夏妃": "主卧",
+    "右代宫朱志香": "主卧",
+    "右代宫留弗夫": "留弗夫房间",
+    "右代宫雾江": "留弗夫房间",
+    "右代宫战人": "留弗夫房间",
+    "右代宫秀吉": "秀吉房间",
+    "右代宫让治": "秀吉房间",
+    "右代宫楼座": "楼座房间",
+    "右代宫真里亚": "楼座房间",
+    "嘉音": "佣人房",
+    "纱音": "佣人房",
+    "乡田": "佣人房",
+    "熊泽": "佣人房",
+    "南条医师": "客房"
+  },
+  "quests": [
+    {
+      "id": "Q1-check-in",
+      "name": "入住",
+      "description": "刚上岛，先回房间放下行李",
+      "trigger": {
+        "phase": "DAWN",
+        "day": 1,
+        "auto_assign": true,
+        "target_roles": "all_alive_except_gm"
+      },
+      "objective": {
+        "type": "move_to",
+        "location_hint": "room"
+      },
+      "reward": {
+        "points": 1,
+        "info_id": "Q1-入住完成"
+      },
+      "prompt": "你刚抵达六轩岛，旅途疲惫。先回自己的房间放下行李吧。你的房间是：{room}。",
+      "timeout": {
+        "phase": "DINNER"
+      }
+    },
+    {
+      "id": "Q2-gather-hall",
+      "name": "大厅集合",
+      "description": "晚餐后家主有重要指示传达",
+      "trigger": {
+        "phase": "DINNER",
+        "day": 1,
+        "auto_assign": true,
+        "target_roles": "all_alive_except_gm"
+      },
+      "objective": {
+        "type": "move_to",
+        "location": "本馆"
+      },
+      "reward": {
+        "points": 1,
+        "info_id": "Q2-集合完成"
+      },
+      "prompt": "晚餐后，家主藏臼有重要指示要传达。请前往本馆大厅集合，不要擅自离开。",
+      "timeout": {
+        "phase": "MIDNIGHT"
+      }
+    },
+    {
+      "id": "Q3-beatrice-announcement",
+      "name": "魔女预告",
+      "description": "以黄金魔女身份发布杀戮预告",
+      "trigger": {
+        "phase": "EVENING",
+        "day": 1,
+        "auto_assign": true,
+        "target_roles": ["贝阿朵莉切"]
+      },
+      "objective": {
+        "type": "broadcast_speech",
+        "contains": ["预告", "魔女", "黄金", "贝阿朵", "杀戮"]
+      },
+      "reward": {
+        "points": 3,
+        "info_id": "Q3-魔女预告"
+      },
+      "prompt": "夜幕降临，是时候了。以黄金魔女贝阿朵莉切的身份，向右代宫家的人们宣告游戏的开始。发布你的杀戮预告吧。",
+      "timeout": {
+        "phase": "MIDNIGHT"
+      }
+    }
+  ]
+}

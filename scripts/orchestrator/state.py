@@ -141,6 +141,9 @@ class GameState:
     # 门状态：location -> "locked" | "unlocked" | "broken"
     door_states: Dict[str, str] = field(default_factory=dict)
 
+    # 剧情任务系统：role -> {quest_id -> quest_state}
+    active_quests: Dict[str, Dict[str, dict]] = field(default_factory=dict)
+
     # ------------------------------------------------------------------
     # 行动点操作
     # ------------------------------------------------------------------

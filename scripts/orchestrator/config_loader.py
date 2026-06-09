@@ -26,6 +26,8 @@ class ConfigLoader:
         self._buffs: Optional[dict] = None
         self._doors: Optional[Dict[str, dict]] = None
         self._room_buildings: Optional[Dict[str, str]] = None
+        self._quests: Optional[List[dict]] = None
+        self._role_rooms: Optional[Dict[str, str]] = None
 
     def _load_json(self, filename: str) -> dict:
         path = self.config_dir / filename
@@ -225,6 +227,26 @@ class ConfigLoader:
             except FileNotFoundError:
                 self._doors = {}
         return self._doors
+
+    @property
+    def quests(self) -> List[dict]:
+        """加载任务配置。若 quests.json 不存在则返回空列表。"""
+        if self._quests is None:
+            try:
+                self._quests = self._load_json("quests.json").get("quests", [])
+            except FileNotFoundError:
+                self._quests = []
+        return self._quests
+
+    @property
+    def role_rooms(self) -> Dict[str, str]:
+        """加载角色房间映射。若 quests.json 不存在则返回空字典。"""
+        if self._role_rooms is None:
+            try:
+                self._role_rooms = self._load_json("quests.json").get("role_rooms", {})
+            except FileNotFoundError:
+                self._role_rooms = {}
+        return self._role_rooms
 
     @property
     def game_rules(self) -> dict:
