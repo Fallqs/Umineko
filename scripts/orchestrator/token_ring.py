@@ -229,6 +229,22 @@ class TokenRingEngine:
         else:
             parts.append("这里没有引人注目的物品。")
 
+        # 贝阿朵莉切（GM角色）专属上下文
+        if role == "贝阿朵莉切":
+            parts.append("")
+            parts.append("你是六轩岛棋盘的主宰者，一切尽在掌握。你不需要调查——你早已知晓一切。")
+            parts.append("你的选择：")
+            parts.append("1. 观察（默默注视棋子们的行动，保持沉默）")
+            parts.append("2. 暗示/引导（通过谜语或红字，将某个角色引向特定方向）")
+            parts.append("3. 命令棋子（给某个NPC下达秘密指令，推动杀人诡计）")
+            parts.append("4. 执行诡计（布置或触发某个杀人机关）")
+            parts.append("")
+            parts.append("【输出格式要求】")
+            parts.append("请用简洁的自然语言描述你的行动（150字以内）。")
+            parts.append("保持魔女的傲慢与神秘感。不需要解释动机。")
+            parts.append('3. 如有移动意图，在末尾声明："下轮移动：{地点名}"')
+            return "\n".join(parts)
+
         # 动态构建可用行动列表
         parts.append("")
         parts.append("你可以选择：")

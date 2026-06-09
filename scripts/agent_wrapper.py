@@ -413,14 +413,17 @@ class SeatAgent:
 
     async def _send_action(self, parent_id: str, action_text: str):
         """向 orchestrator 发送 action 消息（新协议）。"""
-        self._send_to_orchestrator({
-            "type": "action",
-            "seat_id": self.seat_id,
-            "role_name": self.role_dir.name,
-            "action_text": action_text,
-            "parent_id": parent_id,
-        })
-        await self._drain_orchestrator()
+        try:
+            self._send_to_orchestrator({
+                "type": "action",
+                "seat_id": self.seat_id,
+                "role_name": self.role_dir.name,
+                "action_text": action_text,
+                "parent_id": parent_id,
+            })
+            await self._drain_orchestrator()
+        except Exception as e:
+            print(f"[Agent] [{self.seat_id}] Failed to send action: {e}")
 
     async def _send_action_review(self, action_text: str, parent_id: str):
         """向 orchestrator 提交玩家行动审查请求（旧协议兼容）。"""
@@ -461,7 +464,12 @@ class SeatAgent:
 
         # turn_token 是唯一的激活入口
         if msg_type == "turn_token":
-            await self._handle_turn_token(msg)
+            try:
+                await self._handle_turn_token(msg)
+            except Exception as e:
+                print(f"[Agent] [{self.seat_id}] Error in _handle_turn_token: {e}")
+                import traceback
+                traceback.print_exc()
             return
 
         # 休眠状态下：非 turn_token 消息只缓存不调用 AI

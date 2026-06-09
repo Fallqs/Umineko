@@ -602,6 +602,7 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def on_action_received(self, role: str, action_msg: dict, slot: str) -> None:
+        self.turn_counter += 1
         seat_id = self.state.role_controller.get(role)
         seat = self.network.seats.get(seat_id) if seat_id else None
         if not seat:
