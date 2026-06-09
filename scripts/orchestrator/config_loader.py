@@ -4,6 +4,7 @@
 集中加载 config/ 目录下的 JSON 配置文件，懒加载 + 缓存。
 """
 
+import heapq
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -18,12 +19,13 @@ class ConfigLoader:
         self._sub_locations: Optional[Dict[str, str]] = None
         self._role_locs: Optional[Dict[str, str]] = None
         self._info_table: Optional[Dict[str, Dict[int, List[Tuple[str, str]]]]] = None
-        self._distances: Optional[Dict[str, Dict[str, int]]] = None
+        self._adjacency: Optional[Dict[str, Dict[str, int]]] = None
         self._items: Optional[Dict[str, dict]] = None
         self._game_rules: Optional[dict] = None
         self._time_slots: Optional[dict] = None
         self._buffs: Optional[dict] = None
         self._doors: Optional[Dict[str, dict]] = None
+        self._room_buildings: Optional[Dict[str, str]] = None
 
     def _load_json(self, filename: str) -> dict:
         path = self.config_dir / filename
@@ -45,8 +47,24 @@ class ConfigLoader:
             self._sub_locations = raw.get("sub_locations", {})
         return self._sub_locations
 
+    @property
+    def room_buildings(self) -> Dict[str, str]:
+        """房间到所属建筑物的映射。不在此映射中的地点视为独立地点。"""
+        if self._room_buildings is None:
+            raw = self._load_json("locations.json")
+            self._room_buildings = raw.get("room_buildings", {})
+        return self._room_buildings
+
     def normalize_location(self, loc: str) -> str:
-        """将多级/子地点归一化为系统认可的一级地点名。"""
+        """将多级/子地点归一化为系统认可的一级地点名。
+
+        匹配优先级：
+        1. 精确匹配一级地点
+        2. 显式 sub_locations 映射
+        3. 清理括号、修饰词后的前缀匹配
+        4. 按 '-' 拆分后前缀匹配
+        5. 无法归一化，返回原值让上层处理
+        """
         if not loc:
             return loc
         # 1. 已是一级地点
@@ -56,12 +74,34 @@ class ConfigLoader:
         mapped = self.sub_locations.get(loc)
         if mapped:
             return mapped
-        # 3. 按 '-' 拆分，取第一部分匹配
-        if "-" in loc:
-            parent = loc.split("-")[0]
-            if parent in self.locations:
-                return parent
-        # 4. 无法归一化，返回原值让上层处理
+        # 3. 清理括号等修饰词（如 "本馆-客房（妈妈的房间）" → "本馆-客房"）
+        cleaned = loc.split("（")[0].split("(")[0].strip()
+        if cleaned != loc:
+            if cleaned in self.locations:
+                return cleaned
+            mapped = self.sub_locations.get(cleaned)
+            if mapped:
+                return mapped
+        # 4. 前缀匹配：输入如 "主卧"，匹配存在的以此前缀的地点
+        for known in self.locations:
+            if known.startswith(cleaned):
+                return known
+        # 5. 按 '-' 拆分，对后半部分做前缀匹配
+        if "-" in cleaned:
+            parts = cleaned.split("-")
+            # 尝试后半部分的前缀匹配
+            for part in reversed(parts):
+                part = part.strip()
+                if not part:
+                    continue
+                for known in self.locations:
+                    if known.startswith(part):
+                        return known
+                # 再尝试显式映射
+                mapped = self.sub_locations.get(part)
+                if mapped:
+                    return mapped
+        # 6. 无法归一化，返回原值
         return loc
 
     @property
@@ -71,10 +111,54 @@ class ConfigLoader:
         return self._role_locs
 
     @property
-    def _raw_distances(self) -> Dict[str, Dict[str, int]]:
-        if self._distances is None:
-            self._distances = self._load_json("locations.json")["distances"]
-        return self._distances
+    def _raw_adjacency(self) -> Dict[str, Dict[str, int]]:
+        if self._adjacency is None:
+            self._adjacency = self._load_json("locations.json").get("adjacency", {})
+        return self._adjacency
+
+    def _dijkstra(self, start: str, end: str) -> int:
+        """在邻接表上运行 Dijkstra 算法求最短路径距离（视为无向图）。"""
+        if start == end:
+            return 0
+        adj = self._raw_adjacency
+
+        # 优先队列: (距离, 节点)
+        pq = [(0, start)]
+        visited = set()
+        while pq:
+            dist, node = heapq.heappop(pq)
+            if node == end:
+                return dist
+            if node in visited:
+                continue
+            visited.add(node)
+            # 出边
+            for neighbor, weight in adj.get(node, {}).items():
+                if neighbor not in visited:
+                    heapq.heappush(pq, (dist + weight, neighbor))
+            # 入边（视为无向图）
+            for other_node, edges in adj.items():
+                if node in edges and other_node not in visited:
+                    heapq.heappush(pq, (dist + edges[node], other_node))
+        # 不连通，返回 fallback
+        return 3
+
+    def get_distance(self, a: str, b: str) -> int:
+        """计算两个地点之间的最短移动距离。
+
+        逻辑：
+        1. 同一地点 → 0
+        2. 同一建筑物内的房间 → 0
+        3. 否则在邻接表上跑 Dijkstra（节点先映射到所属建筑物/独立地点）
+        4. 不连通返回默认 fallback 3
+        """
+        if a == b:
+            return 0
+        building_a = self.room_buildings.get(a, a)
+        building_b = self.room_buildings.get(b, b)
+        if building_a == building_b:
+            return 0
+        return self._dijkstra(building_a, building_b)
 
     @property
     def location_info_table(self) -> Dict[str, Dict[int, List[Tuple[str, str]]]]:
@@ -89,17 +173,6 @@ class ConfigLoader:
                     result[loc][int(day_str)] = [tuple(e) for e in entries]
             self._info_table = result
         return self._info_table
-
-    def get_distance(self, a: str, b: str) -> int:
-        if a == b:
-            return 0
-        d = self._raw_distances.get(a, {}).get(b)
-        if d is not None:
-            return d
-        d = self._raw_distances.get(b, {}).get(a)
-        if d is not None:
-            return d
-        return 3
 
     def get_location_info(self, location: str, day: int) -> List[Tuple[str, str, Optional[dict]]]:
         """返回地点信息条目，格式: (info_id, desc, requires_dict)。

@@ -1232,6 +1232,61 @@
       "default_visibility": "hidden"
     },
     {
+      "id": "key:主卧",
+      "name": "主卧钥匙",
+      "type": "permanent",
+      "description": "一把精致的红木钥匙，刻着主卧的花纹",
+      "player_desc": "你握着这把精致的红木钥匙。",
+      "gm_desc": "主卧的钥匙，可以上锁/解锁主卧的门。",
+      "location": "主卧",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "key:留弗夫房间",
+      "name": "留弗夫房间钥匙",
+      "type": "permanent",
+      "description": "一把普通的房间钥匙",
+      "player_desc": "你握着这把普通的房间钥匙。",
+      "gm_desc": "留弗夫房间的钥匙。",
+      "location": "留弗夫房间",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "key:楼座房间",
+      "name": "楼座房间钥匙",
+      "type": "permanent",
+      "description": "一把小巧的房间钥匙",
+      "player_desc": "你握着这把小巧的房间钥匙。",
+      "gm_desc": "楼座房间的钥匙。",
+      "location": "楼座房间",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "key:秀吉房间",
+      "name": "秀吉房间钥匙",
+      "type": "permanent",
+      "description": "一把别馆房间的钥匙",
+      "player_desc": "你握着这把别馆房间的钥匙。",
+      "gm_desc": "秀吉房间的钥匙。",
+      "location": "秀吉房间",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
+      "id": "key:佣人房",
+      "name": "佣人房钥匙",
+      "type": "permanent",
+      "description": "一把朴素的佣人房钥匙",
+      "player_desc": "你握着这把朴素的佣人房钥匙。",
+      "gm_desc": "佣人房的钥匙。",
+      "location": "佣人房",
+      "day_available": 1,
+      "default_visibility": "hidden"
+    },
+    {
       "id": "key:万能",
       "name": "万能钥匙",
       "type": "permanent",
