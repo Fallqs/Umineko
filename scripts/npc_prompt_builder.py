@@ -88,6 +88,20 @@ class NpcPromptBuilder:
 
         # 4. NPC 指令后缀
         parts.append("你是NPC，请直接输出角色行动，不需要解释规则。")
+        parts.append("""【输出格式要求】
+你必须严格使用以下标记格式输出：
+
+$sound "你的发言内容（如有）"
+$action 你的行动描述
+$argue 你的推理或动机说明（可选）
+
+规则：
+- 禁止输出任何思考过程、分析推理、自我怀疑或元评论
+- 禁止输出 <player_input>、<orchestration_request> 等元数据标签，以及 markdown 代码块
+- 你可以使用 <shout>大喊内容</shout>、<whisper>私语内容</whisper>、<red>红字内容</red> 等发言修饰标签
+- $sound 后的发言必须用双引号包裹
+- $action 应简洁描述具体行动（调查、移动、使用物品等）
+- 不要写小说式的心理描写或环境渲染""")
 
         return "\n\n".join(parts)
 

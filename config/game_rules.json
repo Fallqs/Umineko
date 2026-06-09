@@ -42,6 +42,7 @@
   },
   "search_success_rate": 0.6,
   "comfort_ap_restore": 2,
+  "initial_dead_roles": ["右代宫金藏"],
   "universal_actions": [
     {
       "id": "search",

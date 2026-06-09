@@ -105,15 +105,21 @@ class Orchestrator:
             all_roles.update(chain)
         all_roles.add("右代宫金藏")
         all_roles.add("贝阿朵莉切")
-        # 已被玩家 seat 控制的角色不生成 NPC
+        # 已被实际启动的玩家 seat 控制的角色不生成 NPC
         controlled_by_player = set()
-        for seat_id, chain in self.config.seat_chains.items():
+        for seat_id in self.active_seats:
+            chain = self.config.seat_chains.get(seat_id, [])
             if chain:
                 controlled_by_player.add(chain[0])
-        npc_roles = all_roles - controlled_by_player
+        # 游戏开始前已死亡的角色不参与
+        initial_dead = set(self.config.game_rules.get("initial_dead_roles", []))
+        self.state.dead_roles.update(initial_dead)
+        npc_roles = all_roles - controlled_by_player - initial_dead
         for role in npc_roles:
             self.expected_seats.add(f"NPC_{role}")
         print(f"[Orchestrator] 预期 seats: {sorted(self.expected_seats)}")
+        if initial_dead:
+            print(f"[Orchestrator] 初始死亡角色: {sorted(initial_dead)}")
 
         # 游戏逻辑引擎
         self.time_engine = TimeEngine(self.state, callbacks=self, config=self.config)
@@ -175,12 +181,14 @@ class Orchestrator:
             all_roles.update(chain)
         all_roles.add("右代宫金藏")
         all_roles.add("贝阿朵莉切")
-        # 已被玩家 seat 控制的角色不生成 NPC
+        # 已被实际启动的玩家 seat 控制的角色不生成 NPC
         controlled_by_player = set()
-        for seat_id, chain in self.config.seat_chains.items():
+        for seat_id in self.active_seats:
+            chain = self.config.seat_chains.get(seat_id, [])
             if chain:
                 controlled_by_player.add(chain[0])
-        npc_roles = sorted(all_roles - controlled_by_player)
+        initial_dead = set(self.config.game_rules.get("initial_dead_roles", []))
+        npc_roles = sorted(all_roles - controlled_by_player - initial_dead)
 
         # Windows bat
         bat_lines = [

@@ -98,7 +98,12 @@ class DeathEngine:
                 current_index = i
                 break
         next_index = current_index + 1
-        if next_index >= len(chain):
+        while next_index < len(chain):
+            new_role = chain[next_index]
+            if new_role not in self.state.dead_roles:
+                break
+            next_index += 1
+        else:
             await self._make_spectator(seat_id)
             return
 

@@ -857,7 +857,7 @@ class SeatAgent:
             })
             return
 
-        # human / npc 模式：直接用 GM Session 生成行动（简化处理，不做审查预解析）
+        # human / npc 模式：直接用 GM Session 生成行动
         if self.mode in ("human", "npc") and self.gm:
             try:
                 if self.mode == "npc":
@@ -867,11 +867,29 @@ class SeatAgent:
                     if preset:
                         prompt = prompt + "\n\n" + preset
                 out_text, _, _ = await self.gm.run_once(prompt)
-                player_input = _extract_player_input(out_text)
-                if player_input:
-                    await self._send_action(msg_id, player_input)
+
+                # 统一解析流程：与 auto 模式相同的结构化输出解析
+                if self.mode == "npc":
+                    parsed = self._parse_player_output(out_text)
+                    if parsed["is_valid"]:
+                        parts = []
+                        if parsed.get("speech"):
+                            parts.append(f'"{parsed["speech"]}"')
+                        if parsed.get("action_text"):
+                            parts.append(parsed["action_text"])
+                        if parsed.get("move_target"):
+                            parts.append(f'下轮移动：{parsed["move_target"]}')
+                        standardized = "\n".join(parts)
+                        await self._send_action(msg_id, standardized or "...（沉默）")
+                    else:
+                        fallback = f"...（{self.role_dir.name}环顾四周，陷入沉思）"
+                        await self._send_action(msg_id, fallback)
                 else:
-                    await self._send_action(msg_id, out_text.strip() or "...（沉默）")
+                    player_input = _extract_player_input(out_text)
+                    if player_input:
+                        await self._send_action(msg_id, player_input)
+                    else:
+                        await self._send_action(msg_id, out_text.strip() or "...（沉默）")
             except Exception as e:
                 print(f"[Agent] [{self.mode}] Error handling turn_token: {e}")
                 await self._send_action(msg_id, f"[处理出错: {e}]")

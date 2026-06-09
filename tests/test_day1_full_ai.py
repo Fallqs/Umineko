@@ -75,10 +75,12 @@ async def main():
     all_roles.add("右代宫金藏")
     all_roles.add("贝阿朵莉切")
     controlled_by_player = set()
-    for seat_id, chain in orch.config.seat_chains.items():
+    for seat_id in orch.active_seats:
+        chain = orch.config.seat_chains.get(seat_id, [])
         if chain:
             controlled_by_player.add(chain[0])
-    npc_roles = sorted(all_roles - controlled_by_player)
+    initial_dead = set(orch.config.game_rules.get("initial_dead_roles", []))
+    npc_roles = sorted(all_roles - controlled_by_player - initial_dead)
     log(f"需要启动的NPC角色: {npc_roles}")
 
     def _ascii_dir_name(seat_id: str) -> str:
